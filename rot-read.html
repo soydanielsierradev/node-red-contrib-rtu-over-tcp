@@ -1,0 +1,188 @@
+<script type="text/javascript">
+    RED.nodes.registerType('rot-read', {
+        category:  'network',
+        color:     '#7B5EA8',
+        defaults: {
+            name:         { value: '' },
+            client:       { value: '', type: 'rot-client' },
+            deviceId:     { value: 1,   required: true, validate: RED.validators.number() },
+            fc:           { value: '4', required: true },
+            startReg:     { value: 0,   required: true, validate: RED.validators.number() },
+            count:        { value: 10,  required: true, validate: RED.validators.number() },
+            pollInterval: { value: 0,   required: true, validate: RED.validators.number() },
+            useInject:    { value: true }
+        },
+        // Node-RED NO soporta inputs como función — debe ser valor estático.
+        // Se actualiza en oneditsave y se fuerza re-render con RED.nodes.dirty(true).
+        inputs:  1,
+        outputs: 3,
+        outputLabels: ['decimal (int16)', 'hexadecimal', 'error'],
+        icon: 'rot.png',
+        label: function () {
+            return this.name || 'ROT Read · ' + (this.host || '');
+        },
+        labelStyle: function () { return 'node_label_italic'; },
+
+        button: {
+            enabled: function () { return !this.useInject; },
+            onclick: function () {
+                $.ajax({
+                    url:  'rot-read/' + this.id,
+                    type: 'POST',
+                    success: function () { RED.notify('Lectura disparada', { type: 'success', timeout: 1500 }); },
+                    error:   function (jqXHR) { RED.notify('Error: ' + jqXHR.status, { type: 'error' }); }
+                });
+            }
+        },
+
+        oneditprepare: function () {
+            const updateBytesHint = () => {
+                const count = parseInt($('#node-input-count').val()) || 0;
+                const fc    = parseInt($('#node-input-fc').val());
+                // FC01/FC02: bits empaquetados → ceil(count/8) bytes de datos
+                // FC03/FC04: registros de 16 bits → count*2 bytes de datos
+                const dataBytes = (fc === 1 || fc === 2)
+                    ? Math.ceil(count / 8)
+                    : count * 2;
+                const expected = 3 + dataBytes + 2;
+                const tipo = (fc === 1 || fc === 2) ? 'bits→bytes' : 'registros';
+                $('#bytes-hint').text('→ ' + expected + ' bytes esperados (' + tipo + ')');
+            };
+            $('#node-input-count').on('input', updateBytesHint);
+            $('#node-input-fc').on('change', updateBytesHint);
+            updateBytesHint();
+
+            const updatePollHint = () => {
+                const seg = parseFloat($('#node-input-pollInterval').val()) || 0;
+                $('#poll-hint').text(seg === 0
+                    ? 'Solo lectura por disparo (Inject o botón del nodo)'
+                    : 'Lectura automática cada ' + seg + ' segundo' + (seg === 1 ? '' : 's'));
+            };
+            $('#node-input-pollInterval').on('input', updatePollHint);
+            updatePollHint();
+
+            // Inicializar checkbox con el valor guardado
+            $('#node-input-useInject').prop('checked', this.useInject !== false);
+        },
+
+        oneditsave: function () {
+            // Leer checkbox y actualizar inputs ANTES de que Node-RED cierre el panel
+            const useInject = $('#node-input-useInject').prop('checked');
+            this.useInject  = useInject;
+            this.inputs     = useInject ? 1 : 0;
+            // Notificar a Node-RED para que redibuje el pin de entrada
+            RED.nodes.dirty(true);
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="rot-read">
+
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Nombre</label>
+        <input type="text" id="node-input-name" placeholder="Nombre del nodo (opcional)">
+    </div>
+
+    <hr/>
+    <div class="form-row" style="margin-bottom:6px">
+        <b><i class="fa fa-exchange"></i>&nbsp; Cliente de conexión</b>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-client"><i class="fa fa-plug"></i> Cliente</label>
+        <input type="text" id="node-input-client">
+    </div>
+
+    <hr/>
+    <div class="form-row" style="margin-bottom:6px">
+        <b><i class="fa fa-microchip"></i>&nbsp; Parámetros Modbus RTU</b>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-deviceId"><i class="fa fa-id-badge"></i> Slave ID</label>
+        <input type="number" id="node-input-deviceId" placeholder="1" style="width:80px">
+        <span style="margin-left:8px;color:#999;font-size:12px">ID del dispositivo en el bus RS485</span>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-fc"><i class="fa fa-code"></i> Función</label>
+        <select id="node-input-fc" style="width:280px">
+            <option value="1">FC01 — Read Coils</option>
+            <option value="2">FC02 — Read Discrete Inputs</option>
+            <option value="3">FC03 — Read Holding Registers</option>
+            <option value="4">FC04 — Read Input Registers</option>
+        </select>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-startReg"><i class="fa fa-map-marker"></i> Dirección del dato</label>
+        <input type="number" id="node-input-startReg" placeholder="0" style="width:80px">
+        <span style="margin-left:8px;color:#999;font-size:12px">Dirección Modbus del primer registro a leer</span>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-count"><i class="fa fa-hashtag"></i> Cantidad</label>
+        <input type="number" id="node-input-count" placeholder="10" style="width:80px">
+        <span style="margin-left:8px;color:#999;font-size:12px" id="bytes-hint"></span>
+    </div>
+
+    <hr/>
+    <div class="form-row" style="margin-bottom:6px">
+        <b><i class="fa fa-clock-o"></i>&nbsp; Temporización</b>
+    </div>
+
+    <!-- Modo de disparo -->
+    <div class="form-row" style="background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;margin-bottom:10px">
+        <label style="width:auto;margin-right:10px" for="node-input-useInject">
+            <i class="fa fa-bolt"></i> Usar con Inject
+        </label>
+        <input type="checkbox" id="node-input-useInject" style="width:auto;vertical-align:middle">
+        <span style="margin-left:8px;color:#666;font-size:12px">
+            Marcado: pin de entrada activo.<br>
+            <span style="margin-left:0">Desmarcado: botón de disparo integrado en el nodo.</span>
+        </span>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-pollInterval"><i class="fa fa-refresh"></i> Intervalo</label>
+        <input type="number" id="node-input-pollInterval" placeholder="0" step="0.1" min="0" style="width:100px">
+        <span style="margin-left:4px;color:#999;font-size:12px">seg</span>
+        <span style="margin-left:4px;color:#999;font-size:12px">(0 = solo por disparo)</span>
+    </div>
+    <div class="form-row" style="margin-top:-6px;margin-left:110px">
+        <span style="color:#7B5EA8;font-size:12px;font-style:italic" id="poll-hint"></span>
+    </div>
+
+    <hr/>
+    <div class="form-row" style="background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
+        <i class="fa fa-info-circle" style="color:#7B5EA8"></i>&nbsp;
+        <b>Salida 1 · decimal:</b> &nbsp;<code>msg.payload[N]</code> = int16 del registro N<br>
+        <b>Salida 2 · hexadecimal:</b> <code>msg.payload[N]</code> = "0xXXXX" del registro N<br>
+        <b>Salida 3 · error:</b> &nbsp;&nbsp;&nbsp;<code>msg.error</code> = descripción del fallo<br>
+        <br>
+        Envía <code>msg.stop = true</code> para detener el polling automático.
+    </div>
+
+</script>
+
+<script type="text/html" data-help-name="rot-read">
+    <p>Lee registros Modbus usando <b>RTU over TCP</b> a través de un <b>ROT Client</b> compartido.</p>
+
+    <h3>Configuración</h3>
+    <p>Selecciona un nodo <b>ROT Client</b> que gestiona la conexión TCP. Varios nodos ROT Read y ROT Write
+    pueden compartir el mismo cliente sin conflictos.</p>
+
+    <h3>Modos de disparo</h3>
+    <ul>
+        <li><b>Usar con Inject (marcado):</b> pin de entrada activo.</li>
+        <li><b>Usar con Inject (desmarcado):</b> botón de disparo integrado en el nodo.</li>
+        <li><b>Polling automático:</b> intervalo en segundos mayor que 0.</li>
+    </ul>
+
+    <h3>Salidas</h3>
+    <ol class="node-ports">
+        <li>Decimal — <code>msg.payload</code>: array int16</li>
+        <li>Hexadecimal — <code>msg.payload</code>: array "0xXXXX"</li>
+        <li>Error — <code>msg.error</code>: descripción del fallo</li>
+    </ol>
+</script>

@@ -1,0 +1,137 @@
+<script type="text/javascript">
+    RED.nodes.registerType('rot-write', {
+        category:  'network',
+        color:     '#5E8A3A',
+        defaults: {
+            name:     { value: '' },
+            client:   { value: '', type: 'rot-client' },
+            deviceId: { value: 1,   required: true, validate: RED.validators.number() },
+            fc:       { value: '6', required: true },
+            startReg: { value: 0,   required: true, validate: RED.validators.number() },
+            value:    { value: '' },
+            values:   { value: '[]' }
+        },
+        inputs:  1,
+        outputs: 2,
+        outputLabels: ['ok (resultado)', 'error'],
+        icon: 'rot.png',
+        label: function () {
+            return this.name || 'ROT Write · FC' + this.fc;
+        },
+        labelStyle: function () { return 'node_label_italic'; },
+
+        oneditprepare: function () {
+            const updateUI = () => {
+                const fc = parseInt($('#node-input-fc').val());
+                if (fc === 5 || fc === 6) {
+                    $('#row-value').show();
+                    $('#row-values').hide();
+                    $('#label-value').text(fc === 5 ? 'Coil (0/1)' : 'Valor (uint16)');
+                    $('#hint-value').text(fc === 5
+                        ? 'true / false — sobreescrito por msg.payload'
+                        : '0 – 65535 — sobreescrito por msg.payload');
+                } else {
+                    $('#row-value').hide();
+                    $('#row-values').show();
+                    $('#label-values').text(fc === 15 ? 'Coils (JSON)' : 'Registros (JSON)');
+                    $('#hint-values').text(fc === 15
+                        ? 'ej: [true, false, true] — sobreescrito por msg.payload'
+                        : 'ej: [100, 200, 300]     — sobreescrito por msg.payload');
+                }
+            };
+            $('#node-input-fc').on('change', updateUI);
+            updateUI();
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="rot-write">
+
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> Nombre</label>
+        <input type="text" id="node-input-name" placeholder="Nombre del nodo (opcional)">
+    </div>
+
+    <hr/>
+    <div class="form-row" style="margin-bottom:6px">
+        <b><i class="fa fa-exchange"></i>&nbsp; Cliente de conexión</b>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-client"><i class="fa fa-plug"></i> Cliente</label>
+        <input type="text" id="node-input-client">
+    </div>
+
+    <hr/>
+    <div class="form-row" style="margin-bottom:6px">
+        <b><i class="fa fa-microchip"></i>&nbsp; Parámetros Modbus RTU</b>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-deviceId"><i class="fa fa-id-badge"></i> Slave ID</label>
+        <input type="number" id="node-input-deviceId" placeholder="1" style="width:80px">
+        <span style="margin-left:8px;color:#999;font-size:12px">ID del dispositivo en el bus RS485</span>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-fc"><i class="fa fa-code"></i> Función</label>
+        <select id="node-input-fc" style="width:290px">
+            <option value="5">FC05 — Write Single Coil</option>
+            <option value="6">FC06 — Write Single Register</option>
+            <option value="15">FC15 — Write Multiple Coils</option>
+            <option value="16">FC16 — Write Multiple Registers</option>
+        </select>
+    </div>
+
+    <div class="form-row">
+        <label for="node-input-startReg"><i class="fa fa-map-marker"></i> Dirección Modbus</label>
+        <input type="number" id="node-input-startReg" placeholder="0" style="width:80px">
+        <span style="margin-left:8px;color:#999;font-size:12px">Dirección del registro / coil a escribir</span>
+    </div>
+
+    <hr/>
+    <div class="form-row" style="margin-bottom:6px">
+        <b><i class="fa fa-pencil"></i>&nbsp; Valor por defecto</b>
+        <span style="margin-left:8px;color:#999;font-size:12px">(msg.payload lo sobreescribe siempre)</span>
+    </div>
+
+    <div class="form-row" id="row-value">
+        <label for="node-input-value"><i class="fa fa-hashtag"></i> <span id="label-value">Valor</span></label>
+        <input type="text" id="node-input-value" placeholder="0" style="width:120px">
+        <span style="margin-left:8px;color:#999;font-size:12px" id="hint-value"></span>
+    </div>
+
+    <div class="form-row" id="row-values">
+        <label for="node-input-values"><i class="fa fa-list"></i> <span id="label-values">Valores</span></label>
+        <input type="text" id="node-input-values" placeholder="[0, 0, 0]" style="width:220px">
+        <span style="margin-left:8px;color:#999;font-size:12px" id="hint-values"></span>
+    </div>
+
+    <hr/>
+    <div class="form-row" style="background:#EEF5E8;border-left:3px solid #5E8A3A;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:2">
+        <i class="fa fa-info-circle" style="color:#5E8A3A"></i>&nbsp;
+        <b>msg.payload para FC05:</b> <code>true</code> / <code>false</code><br>
+        <b>msg.payload para FC06:</b> <code>1234</code> (número uint16)<br>
+        <b>msg.payload para FC15:</b> <code>[true, false, true]</code> (array boolean)<br>
+        <b>msg.payload para FC16:</b> <code>[100, 200, 300]</code> (array uint16)
+    </div>
+
+</script>
+
+<script type="text/html" data-help-name="rot-write">
+    <p>Escribe registros o coils Modbus usando <b>RTU over TCP</b> a través de un <b>ROT Client</b> compartido.</p>
+
+    <h3>Funciones soportadas</h3>
+    <ul>
+        <li><b>FC05</b> — Write Single Coil: <code>msg.payload = true/false</code></li>
+        <li><b>FC06</b> — Write Single Register: <code>msg.payload = 1234</code></li>
+        <li><b>FC15</b> — Write Multiple Coils: <code>msg.payload = [true, false, true]</code></li>
+        <li><b>FC16</b> — Write Multiple Registers: <code>msg.payload = [100, 200, 300]</code></li>
+    </ul>
+
+    <h3>Salidas</h3>
+    <ol class="node-ports">
+        <li>OK — <code>msg.payload</code>: <code>{ reg, value }</code> (FC05/06) o <code>{ reg, count }</code> (FC15/16)</li>
+        <li>Error — <code>msg.error</code>: descripción del fallo</li>
+    </ol>
+</script>

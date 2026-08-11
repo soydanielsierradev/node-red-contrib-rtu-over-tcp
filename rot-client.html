@@ -1,0 +1,103 @@
+<script type="text/javascript">
+    RED.nodes.registerType('rot-client', {
+        category: 'config',
+        defaults: {
+            name:    { value: '' },
+            host:    { value: '192.168.1.1', required: true },
+            port:    { value: 502,           required: true, validate: RED.validators.number() },
+            timeout:  { value: 5,   required: true, validate: RED.validators.number() },
+            gap:      { value: 50,  required: false, validate: RED.validators.number(true) },
+            gapError: { value: 500, required: false, validate: RED.validators.number(true) }
+        },
+        label: function () {
+            return this.name || this.host + ':' + this.port;
+        }
+    });
+</script>
+
+<script type="text/html" data-template-name="rot-client">
+
+    <div class="form-row">
+        <label for="node-config-input-name"><i class="fa fa-tag"></i> Nombre</label>
+        <input type="text" id="node-config-input-name" placeholder="Conversor RS485 (opcional)">
+    </div>
+
+    <hr/>
+    <div class="form-row" style="margin-bottom:6px">
+        <b><i class="fa fa-globe"></i>&nbsp; Conexión TCP</b>
+    </div>
+
+    <div class="form-row">
+        <label for="node-config-input-host"><i class="fa fa-server"></i> IP / Host</label>
+        <input type="text" id="node-config-input-host" placeholder="192.168.1.100" style="width:200px">
+    </div>
+
+    <div class="form-row">
+        <label for="node-config-input-port"><i class="fa fa-plug"></i> Puerto</label>
+        <input type="number" id="node-config-input-port" placeholder="502" style="width:120px">
+    </div>
+
+    <div class="form-row">
+        <label for="node-config-input-timeout"><i class="fa fa-hourglass-half"></i> Timeout</label>
+        <input type="number" id="node-config-input-timeout" placeholder="5" step="0.5" min="0.5" style="width:100px">
+        <span style="margin-left:4px;color:#999;font-size:12px">seg por operación</span>
+    </div>
+
+    <hr/>
+    <div class="form-row" style="margin-bottom:6px">
+        <b><i class="fa fa-clock-o"></i>&nbsp; Silencio entre tramas (RS485)</b>
+    </div>
+
+    <div class="form-row">
+        <label for="node-config-input-gap"><i class="fa fa-pause"></i> Normal</label>
+        <input type="number" id="node-config-input-gap" placeholder="50" min="0" style="width:100px">
+        <span style="margin-left:4px;color:#999;font-size:12px">ms tras una operación correcta</span>
+    </div>
+
+    <div class="form-row">
+        <label for="node-config-input-gapError"><i class="fa fa-exclamation-triangle"></i> Tras fallo</label>
+        <input type="number" id="node-config-input-gapError" placeholder="500" min="0" style="width:100px">
+        <span style="margin-left:4px;color:#999;font-size:12px">ms tras CRC o timeout</span>
+    </div>
+
+    <div class="form-row" style="background:#FFF8E1;border-left:3px solid #FFA000;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.7">
+        <i class="fa fa-lightbulb-o" style="color:#FFA000"></i>&nbsp;
+        El esclavo necesita soltar la línea antes de recibir la siguiente petición.
+        Encadenar tramas sin pausa provoca <b>errores CRC intermitentes</b>.
+        Sube estos valores si el bus es largo, tiene muchos esclavos o el conversor es lento.
+    </div>
+
+    <hr/>
+    <div class="form-row" style="background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
+        <i class="fa fa-info-circle" style="color:#7B5EA8"></i>&nbsp;
+        Este cliente es <b>compartido</b> entre todos los nodos ROT Read y ROT Write
+        que apunten al mismo conversor.<br>
+        Usa <b>una sola conexión TCP persistente</b> con cola interna para serializar
+        las peticiones y evitar colisiones en el bus RS485.
+    </div>
+
+</script>
+
+<script type="text/html" data-help-name="rot-client">
+    <p>Nodo de configuración compartido para comunicaciones <b>Modbus RTU over TCP</b>.</p>
+    <p>Gestiona una única conexión TCP persistente con cola interna de peticiones.
+    Todos los nodos <b>ROT Read</b> y <b>ROT Write</b> que apunten al mismo conversor
+    deben usar el mismo cliente.</p>
+
+    <h3>Ventajas</h3>
+    <ul>
+        <li>Una sola conexión TCP para todos los nodos — sin conflictos ni errores EACCES.</li>
+        <li>Cola serializada — las peticiones de lectura y escritura nunca se solapan.</li>
+        <li>Reconexión automática si el conversor se desconecta.</li>
+    </ul>
+
+    <h3>Configuración</h3>
+    <dl class="message-properties">
+        <dt>IP / Host <span class="property-type">string</span></dt>
+        <dd>Dirección IP o hostname del conversor RS485→TCP.</dd>
+        <dt>Puerto <span class="property-type">number</span></dt>
+        <dd>Puerto TCP del conversor. Por defecto 502.</dd>
+        <dt>Timeout <span class="property-type">number</span></dt>
+        <dd>Tiempo máximo de espera por operación, en segundos.</dd>
+    </dl>
+</script>

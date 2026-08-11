@@ -1,0 +1,74 @@
+name: Build & Release
+
+on:
+  push:
+    branches:
+      - main          # genera artefacto en cada push a main
+    tags:
+      - 'v*'          # crea un Release oficial cuando haces: git tag v0.5.0
+
+jobs:
+  # ── Job 1: siempre que haya push a main ────────────────────────────────────
+  build:
+    name: npm pack → artefacto
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generar .tgz
+        run: npm pack
+
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-red-contrib-rtu-over-tcp
+          path: '*.tgz'
+          retention-days: 30        # disponible 30 días en la pestaña Actions
+
+  # ── Job 2: solo cuando haces git tag v* ────────────────────────────────────
+  release:
+    name: Crear Release en GitHub
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build                   # espera a que build termine correctamente
+
+    permissions:
+      contents: write              # necesario para crear el Release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generar .tgz
+        run: npm pack
+
+      - name: Leer versión del package.json
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Crear Release y adjuntar .tgz
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ steps.pkg.outputs.version }}"
+          body: |
+            ## node-red-contrib-rtu-over-tcp v${{ steps.pkg.outputs.version }}
+
+            ### Instalación en Node-RED
+            1. Descarga el `.tgz` adjunto
+            2. Node-RED → **Manage Palette → Install → Upload**
+            3. Selecciona el archivo y confirma
+          files: '*.tgz'
+          draft: false
+          prerelease: false
