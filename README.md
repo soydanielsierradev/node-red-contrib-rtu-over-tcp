@@ -1,240 +1,248 @@
-<img src="./icons/rot.png" width="32" height="32">
-<img src="https://cdn.worldvectorlogo.com/logos/node-red-1.svg" width="32" height="32"> node-red-contrib-rtu-over-tcp
+<p align="center">
+  <img src="./icons/rot.png" width="90" height="90" alt="Modbus">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="https://cdn.worldvectorlogo.com/logos/node-red-1.svg" width="90" height="90" alt="Node-RED">
+</p>
 
-**Autor:** Daniel Sierra  
-**Descripción:** Nodos Node-RED para leer y escribir registros Modbus usando **RTU over TCP**
+<h1 align="center">node-red-contrib-rtu-over-tcp</h1>
 
----
-
-Frame RTU completo con CRC16 sobre socket TCP raw.  
-Conexión TCP **persistente con reconexión automática** y cola de peticiones serializada.  
-Compatible con: Ibercon RS485.
-
----
-
-## Instalación del paquete
-
-Este paquete se distribuye como un archivo `.tgz`. A continuación, se detallan las formas de descarga e instalación.
-
-### 1. Descargar el paquete
-
-1. Ir a la pestaña **Releases** del repositorio
-2. Seleccionar la versión **v1.0.0**
-3. Descargar el archivo `.tgz` adjunto
-
-### 2. Instalación en Node-RED
-
-1. Abrir Node-RED
-2. Ir a: Menu → Manage Palette → Install
-3. Seleccionar Upload
-4. Seleccionar el archivo `.tgz`
-5. Confirmar instalación
+<p align="center">
+  <b>Author:</b> Daniel Sierra<br>
+  <b>Description:</b> Node-RED nodes to read and write Modbus registers over <b>RTU over TCP</b>
+</p>
 
 ---
 
-## Nodos disponibles
+Full RTU frame with CRC16 over a raw TCP socket.  
+**Persistent TCP connection with automatic reconnection** and a serialized request queue.  
+Compatible with: Ibercon RS485.
 
-| Nodo | Descripción |
+---
+
+## Package installation
+
+This package is distributed as a `.tgz` file. The download and installation steps are described below.
+
+### 1. Download the package
+
+1. Go to the **Releases** tab of the repository
+2. Select version **v1.0.0**
+3. Download the attached `.tgz` file
+
+### 2. Install in Node-RED
+
+1. Open Node-RED
+2. Go to: Menu → Manage Palette → Install
+3. Select Upload
+4. Choose the `.tgz` file
+5. Confirm the installation
+
+---
+
+## Available nodes
+
+| Node | Description |
 |------|-------------|
-| **rot-client** | Nodo de configuración. Gestiona la conexión TCP y la cola de peticiones. |
-| **rot-read** | Lee coils y registros Modbus (FC01, FC02, FC03, FC04). |
-| **rot-write** | Escribe registros Modbus (FC05, FC06, FC15, FC16). |
+| **rot-client** | Configuration node. Manages the TCP connection and the request queue. |
+| **rot-read** | Reads Modbus coils and registers (FC01, FC02, FC03, FC04). |
+| **rot-write** | Writes Modbus registers (FC05, FC06, FC15, FC16). |
 
 ---
 
-## Configuración
+## Configuration
 
-### ROT Client (nodo de configuración)
+### ROT Client (configuration node)
 
-| Campo           | Descripción                                         | Ejemplo       |
-|-----------------|----------------------------------------------------|---------------|
-| Nombre          | Etiqueta opcional para el nodo                     | Mi gateway   |
-| IP / Host       | Dirección IP o hostname del conversor TCP        | 192.168.1.100 |
-| Puerto          | Puerto TCP del conversor                          | 502           |
-| Timeout         | Tiempo máximo de espera por respuesta, en seg.   | 5             |
+| Field    | Description                                    | Example       |
+|----------|------------------------------------------------|---------------|
+| Name     | Optional label for the node                    | My gateway    |
+| IP / Host| IP address or hostname of the TCP converter    | 192.168.1.100 |
+| Port     | TCP port of the converter                      | 502           |
+| Timeout  | Maximum wait time for a response, in seconds   | 5             |
 
-> **Nota:** Todos los nodos `rot-read` y `rot-write` deben seleccionar un `ROT Client` existente.
+> **Note:** Every `rot-read` and `rot-write` node must select an existing `ROT Client`.
 
 ### ROT Read
 
-| Campo           | Descripción                                                          | Ejemplo       |
+| Field           | Description                                                          | Example       |
 |-----------------|----------------------------------------------------------------------|---------------|
-| Nombre          | Etiqueta opcional para el nodo                                       | Mi sensor     |
-| ROT Client      | Nodo de configuración compartido                                   | (selección)   |
-| Usar con Inject | Marcado: pin de entrada visible. Desmarcado: botón integrado en nodo | ✓             |
-| Slave ID        | Device ID en el bus RS485                                            | 5             |
-| Función         | FC01 Read Coil / FC02 Read Discrete Input / FC03 Holding / FC04 Input | FC04          |
-| Reg. inicial    | Dirección del primer registro (base 0)                               | 0             |
-| Cantidad        | Número de registros a leer                                           | 45            |
-| Intervalo       | Segundos entre lecturas automáticas. `0` = solo por disparador     | 1             |
+| Name            | Optional label for the node                                          | My sensor     |
+| ROT Client      | Shared configuration node                                            | (selection)   |
+| Use with Inject | Checked: input pin visible. Unchecked: button embedded in the node   | ✓             |
+| Slave ID        | Device ID on the RS485 bus                                           | 5             |
+| Function        | FC01 Read Coil / FC02 Read Discrete Input / FC03 Holding / FC04 Input | FC04          |
+| Start reg.      | Address of the first register (base 0)                               | 0             |
+| Count           | Number of registers to read                                         | 45            |
+| Interval        | Seconds between automatic reads. `0` = trigger only                  | 1             |
 
 ### ROT Write
 
-| Campo           | Descripción                                                          | Ejemplo       |
-|-----------------|----------------------------------------------------------------------|---------------|
-| Nombre          | Etiqueta opcional para el nodo                                       | Escritor      |
-| ROT Client      | Nodo de configuración compartido                                   | (selección)   |
-| Función         | FC05 Write Single Coil / FC06 Write Single Register / FC15 Write Multiple Coils / FC16 Write Multiple Registers | FC16 |
-| Slave ID        | Device ID en el bus RS485                                            | 5             |
-| Reg. inicial    | Dirección del primer registro (base 0)                               | 0             |
-| Valor           | Valor fijo para FC05/FC06 (opcional, se puede enviar por msg.payload) | 1234          |
-| Valores         | Array JSON de valores para FC15/FC16 (opcional)                       | `[1,0,1,1]`  |
+| Field       | Description                                                          | Example       |
+|-------------|----------------------------------------------------------------------|---------------|
+| Name        | Optional label for the node                                         | Writer        |
+| ROT Client  | Shared configuration node                                          | (selection)   |
+| Function    | FC05 Write Single Coil / FC06 Write Single Register / FC15 Write Multiple Coils / FC16 Write Multiple Registers | FC16 |
+| Slave ID    | Device ID on the RS485 bus                                          | 5             |
+| Start reg.  | Address of the first register (base 0)                             | 0             |
+| Value       | Fixed value for FC05/FC06 (optional, can be sent via msg.payload)  | 1234          |
+| Values      | JSON array of values for FC15/FC16 (optional)                      | `[1,0,1,1]`   |
 
 ---
 
-## Modos de disparo (rot-read)
+## Trigger modes (rot-read)
 
-| Modo | Descripción |
+| Mode | Description |
 |------|-------------|
-| **Inject externo** | `Usar con Inject` marcado. El nodo expone un pin de entrada. Conecta un nodo Inject, Change u otro disparador. |
-| **Botón integrado** | `Usar con Inject` desmarcado. El nodo tiene un botón propio (igual al nodo Inject nativo). No necesita pin de entrada. |
-| **Polling automático** | `Intervalo > 0`. El nodo lanza lecturas periódicas independientemente del modo de disparador. |
-| **Detener polling** | Envía `msg.stop = true` a la entrada del nodo en cualquier momento. |
+| **External Inject** | `Use with Inject` checked. The node exposes an input pin. Connect an Inject, Change or any other trigger node. |
+| **Embedded button** | `Use with Inject` unchecked. The node has its own button (same as the native Inject node). No input pin needed. |
+| **Automatic polling** | `Interval > 0`. The node fires periodic reads regardless of the trigger mode. |
+| **Stop polling** | Send `msg.stop = true` to the node input at any time. |
 
 ---
 
-## Salidas
+## Outputs
 
 ### rot-read
 
-| Salida | `msg.topic`     | `msg.payload`                                                       | Notas                          |
+| Output | `msg.topic`     | `msg.payload`                                                        | Notes                          |
 |--------|-----------------|---------------------------------------------------------------------|--------------------------------|
-| 1      | `modbus/boolean`| Array de booleanos (para FC01/FC02) o int16 con signo (para FC03/FC04) | Incluye `msg.timestamp` ISO 8601 |
-| 2      | `modbus/hex`    | Array de strings. `msg.payload[N]` = `"0xXXXX"` (FC03/FC04)            | Incluye `msg.timestamp` ISO 8601 |
-| 3      | —               | `null`                                                              | `msg.error` = descripción del fallo |
+| 1      | `modbus/boolean`| Array of booleans (for FC01/FC02) or signed int16 (for FC03/FC04)   | Includes `msg.timestamp` ISO 8601 |
+| 2      | `modbus/hex`    | Array of strings. `msg.payload[N]` = `"0xXXXX"` (FC03/FC04)          | Includes `msg.timestamp` ISO 8601 |
+| 3      | —               | `null`                                                              | `msg.error` = failure description |
 
 ### rot-write
 
-| Salida | `msg.topic`   | `msg.payload`                              | Notas                          |
+| Output | `msg.topic`   | `msg.payload`                              | Notes                          |
 |--------|---------------|--------------------------------------------|--------------------------------|
-| 1      | `modbus/write`| Objeto con `reg`, `count` y `value`        | Incluye `msg.timestamp` ISO 8601 |
-| 2      | —             | `null`                                     | `msg.error` = descripción del fallo |
+| 1      | `modbus/write`| Object with `reg`, `count` and `value`     | Includes `msg.timestamp` ISO 8601 |
+| 2      | —             | `null`                                     | `msg.error` = failure description |
 
 ---
 
-## Sobreescribir parámetros por mensaje
+## Overriding parameters per message
 
-Los siguientes campos en el mensaje de entrada sobreescriben temporalmente la configuración del panel:
+The following fields in the input message temporarily override the panel configuration:
 
-### Para rot-read
+### For rot-read
 
 ```javascript
-msg.host     = "192.168.1.50";  // nueva IP (crea conexión temporal)
-msg.port     = 502;             // nuevo puerto (crea conexión temporal)
-msg.deviceId = 3;               // nuevo Slave ID
-msg.fc       = 3;              // 1 = FC01, 2 = FC02, 3 = FC03, 4 = FC04
-msg.startReg = 100;            // nuevo registro inicial
-msg.count    = 20;             // nueva cantidad de registros
-msg.timeout  = 3;              // nuevo timeout en segundos
+msg.host     = "192.168.1.50";  // new IP (creates a temporary connection)
+msg.port     = 502;             // new port (creates a temporary connection)
+msg.deviceId = 3;               // new Slave ID
+msg.fc       = 3;               // 1 = FC01, 2 = FC02, 3 = FC03, 4 = FC04
+msg.startReg = 100;             // new start register
+msg.count    = 20;              // new register count
+msg.timeout  = 3;               // new timeout in seconds
 ```
 
-### Para rot-write
+### For rot-write
 
 ```javascript
-msg.host     = "192.168.1.50";  // nueva IP (crea conexión temporal)
-msg.port     = 502;             // nuevo puerto (crea conexión temporal)
-msg.deviceId = 3;              // nuevo Slave ID
-msg.fc       = 16;             // 5 = FC05, 6 = FC06, 15 = FC15, 16 = FC16
-msg.startReg = 100;            // nuevo registro inicial
-msg.payload = [1, 2, 3, 4];    // valores a escribir ( requerido para FC15/FC16)
-msg.payload = 1234;            // valor único (para FC05/FC06)
+msg.host     = "192.168.1.50";  // new IP (creates a temporary connection)
+msg.port     = 502;             // new port (creates a temporary connection)
+msg.deviceId = 3;               // new Slave ID
+msg.fc       = 16;              // 5 = FC05, 6 = FC06, 15 = FC15, 16 = FC16
+msg.startReg = 100;             // new start register
+msg.payload  = [1, 2, 3, 4];    // values to write (required for FC15/FC16)
+msg.payload  = 1234;            // single value (for FC05/FC06)
 ```
 
-> **Nota:** Si `msg.host` o `msg.port` difieren de la configuración del nodo, se crea una conexión TCP temporal solo para esa operación.
+> **Note:** If `msg.host` or `msg.port` differ from the node configuration, a temporary TCP connection is created just for that operation.
 
 ---
 
-## Funciones Modbus soportadas
+## Supported Modbus functions
 
-| Código | Función | Descripción              | Payload de entrada        | Salida               |
-|--------|---------|-------------------------|-------------------------|----------------------|
-| FC01   | Read Coil Inputs       | Lee coils (bits)         | —                     | array de booleanos     |
-| FC02   | Read Discrete Inputs  | Lee entradas discretas | —                     | array de booleanos   |
-| FC03   | Read Holding Registers| Lee registros (int16) | —                     | array de int16       |
-| FC04   | Read Input Registers  | Lee registros de entrada | —                     | array de int16       |
-| FC05   | Write Single Coil      | `true/false` o `0/1`     | `msg.payload`             | —                 |
-| FC06   | Write Single Register  | número (int16)          | `msg.payload`             | —                 |
-| FC15   | Write Multiple Coils   | array de booleanos      | `msg.payload = [...]`     | —                 |
-| FC16   | Write Multiple Registers| array de números      | `msg.payload = [...]`    | —                 |
-
----
-
-## Comportamiento de la conexión TCP
-
-El nodo `rot-client` mantiene una **conexión TCP persistente** con el conversor:
-
-- Se conecta al primer disparo o al arrancar si el polling está activo.
-- Las peticiones se encolan y se ejecutan en serie (una a una), evitando colisiones en el bus RS485.
-- Ante desconexión inesperada, la petición en curso recibe error y el nodo reintenta la conexión automáticamente en **2 segundos** si hay peticiones pendientes.
-- Al cerrar el nodo (deploy / reinicio) la conexión se cierra limpiamente.
-- El indicador de estado refleja el estado en tiempo real: `inactivo` → `conectado` → `leyendo…` → `ok` / `error`.
+| Code | Function | Description              | Input payload             | Output               |
+|------|----------|--------------------------|---------------------------|----------------------|
+| FC01 | Read Coils              | Reads coils (bits)       | —                     | array of booleans    |
+| FC02 | Read Discrete Inputs    | Reads discrete inputs    | —                     | array of booleans    |
+| FC03 | Read Holding Registers  | Reads registers (int16)  | —                     | array of int16       |
+| FC04 | Read Input Registers    | Reads input registers    | —                     | array of int16       |
+| FC05 | Write Single Coil       | `true/false` or `0/1`    | `msg.payload`             | —                    |
+| FC06 | Write Single Register   | number (int16)           | `msg.payload`             | —                    |
+| FC15 | Write Multiple Coils    | array of booleans        | `msg.payload = [...]`     | —                    |
+| FC16 | Write Multiple Registers| array of numbers         | `msg.payload = [...]`     | —                    |
 
 ---
 
-## Bytes esperados en la respuesta
+## TCP connection behavior
 
-Para `N` registros la respuesta RTU tiene exactamente `3 + N × 2 + 2` bytes.  
-El panel muestra este valor dinámicamente al editar el campo **Cantidad**.
+The `rot-client` node keeps a **persistent TCP connection** with the converter:
+
+- It connects on the first trigger, or on startup if polling is active.
+- Requests are queued and executed serially (one at a time), avoiding collisions on the RS485 bus.
+- On an unexpected disconnect, the in-flight request receives an error and the node retries the connection automatically after **2 seconds** if there are pending requests.
+- When the node closes (deploy / restart), the connection is closed cleanly.
+- The status indicator reflects the state in real time: `idle` → `connected` → `reading…` → `ok` / `error`.
 
 ---
 
-## Requisitos
+## Expected response bytes
+
+For `N` registers the RTU response is exactly `3 + N × 2 + 2` bytes.  
+The panel shows this value dynamically as you edit the **Count** field.
+
+---
+
+## Requirements
 
 - Node-RED **≥ 2.0.0**
 - Node.js **≥ 14.0.0**
 
 ---
 
-## Cambios en 1.0.0
+## Changes in 1.0.0
 
-Correcciones de robustez sobre el bus Modbus. Ejecuta `npm test` para verificarlas.
+Robustness fixes on the Modbus bus. Run `npm test` to verify them.
 
-### Escrituras rechazadas agotaban el timeout completo (critico)
+### Rejected writes exhausted the full timeout (critical)
 
-Una excepcion Modbus ocupa 5 bytes, pero las escrituras se encolaban con
-`minBytes: 8`, asi que `_tryParse` cortaba antes de procesarlas y la peticion
-esperaba el timeout entero **pese a haber recibido respuesta**. Con un timeout
-de 5 s, cada escritura rechazada dejaba el bus parado 5 s y el error se
-reportaba como "sin respuesta", ocultando la causa real.
+A Modbus exception is 5 bytes, but writes were queued with `minBytes: 8`, so
+`_tryParse` cut off before processing them and the request waited out the whole
+timeout **even though a response had been received**. With a 5 s timeout, each
+rejected write left the bus idle for 5 s and the error was reported as "no
+response", hiding the real cause.
 
-Ahora la excepcion se detecta antes del corte por `minBytes`, para lecturas y
-escrituras por igual.
+The exception is now detected before the `minBytes` cutoff, for reads and
+writes alike.
 
-### Las excepciones se reportaban como "Respuesta corta"
+### Exceptions were reported as "Short response"
 
-En los tres parsers, la comprobacion de longitud iba antes que la del bit de
-excepcion, de modo que el mensaje "Excepcion Modbus" era inalcanzable. Se ha
-invertido el orden y se ha añadido la descripcion del codigo: el caso mas
-comun, el 2, ahora se lee como "direccion de registro ilegal (registro
-inexistente en el equipo)" en vez de "Respuesta corta: 5 bytes, esperados 25".
+In all three parsers, the length check ran before the exception-bit check, so
+the "Modbus exception" message was unreachable. The order has been swapped and
+the code description added: the most common one, code 2, now reads as "illegal
+register address (register not present on the device)" instead of "Short
+response: 5 bytes, expected 25".
 
-### Sin silencio entre tramas (origen de CRC intermitentes)
+### No silence between frames (source of intermittent CRC errors)
 
-La cola encadenaba una transaccion tras otra sin pausa. En RS485 el esclavo
-necesita soltar la linea antes de recibir la siguiente peticion, y no dar ese
-margen produce errores CRC esporadicos que se agravan cuantos mas esclavos hay.
+The queue chained one transaction after another with no pause. On RS485 the
+slave needs to release the line before receiving the next request, and not
+giving it that margin produces sporadic CRC errors that get worse the more
+slaves there are.
 
-Se han añadido dos parametros nuevos en el nodo de configuracion: **Normal**
-(50 ms por defecto, tras una operacion correcta) y **Tras fallo** (500 ms, tras
-CRC o timeout). Las configuraciones existentes adoptan estos valores sin tocar
-nada. Subelos si el bus es largo o el conversor es lento.
+Two new parameters were added to the configuration node: **Normal** (50 ms by
+default, after a successful operation) and **After failure** (500 ms, after a
+CRC error or timeout). Existing configurations adopt these values without any
+changes. Raise them if the bus is long or the converter is slow.
 
-### El cliente quedaba zombi tras un deploy parcial
+### The client became a zombie after a partial deploy
 
-`unsubscribe()` llamaba a `destroy()`, que marca `_closed = true`, y
-`subscribe()` no revertia el flag. Si Node-RED recreaba los nodos read/write
-conservando el de configuracion, el cliente reconectaba pero se quedaba sin
-reconexion automatica de forma permanente. `subscribe()` vuelve a abrirlo.
+`unsubscribe()` called `destroy()`, which sets `_closed = true`, and
+`subscribe()` did not revert the flag. If Node-RED recreated the read/write
+nodes while keeping the configuration node, the client reconnected but was
+left permanently without automatic reconnection. `subscribe()` now reopens it.
 
-### Otros
+### Other
 
-- `socket.setTimeout()` no se llamaba nunca, asi que el handler `'timeout'` era
-  codigo muerto: un gateway medio-abierto (socket vivo, sin respuestas) no se
-  detectaba. Ahora se arma a `timeout * 3` con un minimo de 30 s.
-- La reconexion automatica solo se programaba si quedaban peticiones en cola.
-  Si el socket caia con el bus en reposo, la siguiente lectura se comia un
-  timeout entero. Ahora tambien reconecta si hay nodos suscritos.
-- `buf[2]` (byteCount) se acota a 250 antes de usarlo para calcular el tamaño
-  esperado: un valor corrupto hacia esperar bytes que no llegaban nunca.
-- `_flush()` ya no adelanta un silencio en curso ni escribe sobre un socket que
-  aun se esta conectando.
+- `socket.setTimeout()` was never called, so the `'timeout'` handler was dead
+  code: a half-open gateway (live socket, no responses) went undetected. It is
+  now armed to `timeout * 3` with a minimum of 30 s.
+- Automatic reconnection was only scheduled if requests remained in the queue.
+  If the socket dropped while the bus was idle, the next read ate a full
+  timeout. It now also reconnects if there are subscribed nodes.
+- `buf[2]` (byteCount) is clamped to 250 before being used to compute the
+  expected size: a corrupt value made it wait for bytes that never arrived.
+- `_flush()` no longer skips an in-progress silence nor writes to a socket that
+  is still connecting.
