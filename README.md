@@ -19,7 +19,7 @@ Este paquete se distribuye como un archivo `.tgz`. A continuación, se detallan 
 ### 1. Descargar el paquete
 
 1. Ir a la pestaña **Releases** del repositorio
-2. Seleccionar la versión **v0.6.0**
+2. Seleccionar la versión **v1.0.0**
 3. Descargar el archivo `.tgz` adjunto
 
 ### 2. Instalación en Node-RED
