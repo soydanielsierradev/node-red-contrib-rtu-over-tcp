@@ -14,8 +14,7 @@
 ---
 
 Full RTU frame with CRC16 over a raw TCP socket.  
-**Persistent TCP connection with automatic reconnection** and a serialized request queue.  
-Compatible with: Ibercon RS485.
+**Persistent TCP connection with automatic reconnection** and a serialized request queue.
 
 ---
 
