@@ -36,6 +36,14 @@
         },
 
         oneditprepare: function () {
+            // El tamaño de la respuesta depende del protocolo del cliente:
+            //   RTU over TCP : slave(1) + fc(1) + byteCount(1) + datos + CRC(2)
+            //   Modbus TCP   : MBAP(7)  + fc(1) + byteCount(1) + datos
+            const protocoloCliente = () => {
+                const c = RED.nodes.node($('#node-input-client').val());
+                return (c && c.protocol === 'tcp') ? 'tcp' : 'rtu';
+            };
+
             const updateBytesHint = () => {
                 const count = parseInt($('#node-input-count').val()) || 0;
                 const fc    = parseInt($('#node-input-fc').val());
@@ -44,12 +52,15 @@
                 const dataBytes = (fc === 1 || fc === 2)
                     ? Math.ceil(count / 8)
                     : count * 2;
-                const expected = 3 + dataBytes + 2;
-                const tipo = (fc === 1 || fc === 2) ? 'bits→bytes' : 'registros';
-                $('#bytes-hint').text('→ ' + expected + ' bytes esperados (' + tipo + ')');
+                const esTcp    = protocoloCliente() === 'tcp';
+                const expected = esTcp ? 9 + dataBytes : 3 + dataBytes + 2;
+                const tipo  = (fc === 1 || fc === 2) ? 'bits→bytes' : 'registros';
+                const proto = esTcp ? 'Modbus TCP' : 'RTU over TCP';
+                $('#bytes-hint').text('→ ' + expected + ' bytes esperados (' + tipo + ', ' + proto + ')');
             };
             $('#node-input-count').on('input', updateBytesHint);
             $('#node-input-fc').on('change', updateBytesHint);
+            $('#node-input-client').on('change', updateBytesHint);
             updateBytesHint();
 
             const updatePollHint = () => {
@@ -95,13 +106,13 @@
 
     <hr/>
     <div class="form-row" style="margin-bottom:6px">
-        <b><i class="fa fa-microchip"></i>&nbsp; Parámetros Modbus RTU</b>
+        <b><i class="fa fa-microchip"></i>&nbsp; Parámetros Modbus</b>
     </div>
 
     <div class="form-row">
         <label for="node-input-deviceId"><i class="fa fa-id-badge"></i> Slave ID</label>
         <input type="number" id="node-input-deviceId" placeholder="1" style="width:80px">
-        <span style="margin-left:8px;color:#999;font-size:12px">ID del dispositivo en el bus RS485</span>
+        <span style="margin-left:8px;color:#999;font-size:12px">Slave ID (RTU) / Unit ID (TCP) del dispositivo</span>
     </div>
 
     <div class="form-row">
@@ -166,7 +177,7 @@
 </script>
 
 <script type="text/html" data-help-name="rot-read">
-    <p>Lee registros Modbus usando <b>RTU over TCP</b> a través de un <b>ROT Client</b> compartido.</p>
+    <p>Lee registros Modbus a través de un <b>ROT Client</b> compartido, tanto en <b>RTU over TCP</b> como en <b>Modbus TCP</b>. El protocolo se elige en el cliente; este nodo funciona igual en ambos casos.</p>
 
     <h3>Configuración</h3>
     <p>Selecciona un nodo <b>ROT Client</b> que gestiona la conexión TCP. Varios nodos ROT Read y ROT Write

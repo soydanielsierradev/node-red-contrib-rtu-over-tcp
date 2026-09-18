@@ -2,15 +2,53 @@
     RED.nodes.registerType('rot-client', {
         category: 'config',
         defaults: {
-            name:    { value: '' },
-            host:    { value: '192.168.1.1', required: true },
-            port:    { value: 502,           required: true, validate: RED.validators.number() },
+            name:     { value: '' },
+            // 'rtu' = Modbus RTU over TCP (comportamiento clásico)
+            // 'tcp' = Modbus TCP (cabecera MBAP)
+            // Las configuraciones antiguas no tienen este campo: el backend
+            // asume 'rtu' cuando falta, así que siguen funcionando igual.
+            protocol: { value: 'rtu', required: true },
+            host:     { value: '192.168.1.1', required: true },
+            port:     { value: 502,           required: true, validate: RED.validators.number() },
             timeout:  { value: 5,   required: true, validate: RED.validators.number() },
             gap:      { value: 50,  required: false, validate: RED.validators.number(true) },
             gapError: { value: 500, required: false, validate: RED.validators.number(true) }
         },
         label: function () {
-            return this.name || this.host + ':' + this.port;
+            const proto = (this.protocol === 'tcp') ? 'TCP' : 'RTU';
+            return this.name || (this.host + ':' + this.port + ' · ' + proto);
+        },
+
+        oneditprepare: function () {
+            const aplicarProtocolo = (cambioManual) => {
+                const esTcp = $('#node-config-input-protocol').val() === 'tcp';
+
+                $('#rot-gap-title').text(esTcp
+                    ? 'Silencio entre tramas (opcional)'
+                    : 'Silencio entre tramas (RS485)');
+
+                $('#rot-gap-rtu').toggle(!esTcp);
+                $('#rot-gap-tcp').toggle(esTcp);
+                $('#rot-info-rtu').toggle(!esTcp);
+                $('#rot-info-tcp').toggle(esTcp);
+
+                // Al cambiar de modo a mano, ajustar los gaps SOLO si siguen
+                // en el valor por defecto del otro modo. Si el usuario los ha
+                // tocado, se respetan.
+                if (!cambioManual) return;
+                const gap    = $('#node-config-input-gap');
+                const gapErr = $('#node-config-input-gapError');
+                if (esTcp) {
+                    if (gap.val()    === '50')  gap.val(0);
+                    if (gapErr.val() === '500') gapErr.val(200);
+                } else {
+                    if (gap.val()    === '0')   gap.val(50);
+                    if (gapErr.val() === '200') gapErr.val(500);
+                }
+            };
+
+            $('#node-config-input-protocol').on('change', () => aplicarProtocolo(true));
+            aplicarProtocolo(false);
         }
     });
 </script>
@@ -19,7 +57,31 @@
 
     <div class="form-row">
         <label for="node-config-input-name"><i class="fa fa-tag"></i> Nombre</label>
-        <input type="text" id="node-config-input-name" placeholder="Conversor RS485 (opcional)">
+        <input type="text" id="node-config-input-name" placeholder="Conversor RS485 / PLC (opcional)">
+    </div>
+
+    <hr/>
+    <div class="form-row" style="margin-bottom:6px">
+        <b><i class="fa fa-exchange"></i>&nbsp; Protocolo</b>
+    </div>
+
+    <div class="form-row">
+        <label for="node-config-input-protocol"><i class="fa fa-sitemap"></i> Modo</label>
+        <select id="node-config-input-protocol" style="width:260px">
+            <option value="rtu">Modbus RTU over TCP (frame RTU + CRC)</option>
+            <option value="tcp">Modbus TCP (cabecera MBAP)</option>
+        </select>
+    </div>
+
+    <div class="form-row" style="background:#EEF4FA;border-left:3px solid #4A7FB5;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.7">
+        <i class="fa fa-question-circle" style="color:#4A7FB5"></i>&nbsp;
+        <b>¿Cuál elijo?</b><br>
+        <b>RTU over TCP</b> — conversores serie↔ethernet transparentes (Teltonika TRB, USR, Elfin,
+        HF2211…) que reenvían el frame RTU tal cual al bus RS485.<br>
+        <b>Modbus TCP</b> — PLCs, analizadores de red, variadores e I/O remotas con puerto
+        ethernet propio, y pasarelas que sí traducen a MBAP.<br>
+        Si el equipo responde pero da <b>CRC inválido</b> o <b>cabecera MBAP inválida</b>, casi
+        siempre es que está seleccionado el modo contrario.
     </div>
 
     <hr/>
@@ -45,7 +107,7 @@
 
     <hr/>
     <div class="form-row" style="margin-bottom:6px">
-        <b><i class="fa fa-clock-o"></i>&nbsp; Silencio entre tramas (RS485)</b>
+        <b><i class="fa fa-clock-o"></i>&nbsp; <span id="rot-gap-title">Silencio entre tramas (RS485)</span></b>
     </div>
 
     <div class="form-row">
@@ -57,18 +119,25 @@
     <div class="form-row">
         <label for="node-config-input-gapError"><i class="fa fa-exclamation-triangle"></i> Tras fallo</label>
         <input type="number" id="node-config-input-gapError" placeholder="500" min="0" style="width:100px">
-        <span style="margin-left:4px;color:#999;font-size:12px">ms tras CRC o timeout</span>
+        <span style="margin-left:4px;color:#999;font-size:12px">ms tras error o timeout</span>
     </div>
 
-    <div class="form-row" style="background:#FFF8E1;border-left:3px solid #FFA000;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.7">
+    <div id="rot-gap-rtu" class="form-row" style="background:#FFF8E1;border-left:3px solid #FFA000;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.7">
         <i class="fa fa-lightbulb-o" style="color:#FFA000"></i>&nbsp;
         El esclavo necesita soltar la línea antes de recibir la siguiente petición.
         Encadenar tramas sin pausa provoca <b>errores CRC intermitentes</b>.
         Sube estos valores si el bus es largo, tiene muchos esclavos o el conversor es lento.
     </div>
 
+    <div id="rot-gap-tcp" class="form-row" style="display:none;background:#FFF8E1;border-left:3px solid #FFA000;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.7">
+        <i class="fa fa-lightbulb-o" style="color:#FFA000"></i>&nbsp;
+        En Modbus TCP no hay bus serie que drenar: lo normal es dejar el silencio en <b>0 ms</b>.
+        Súbelo solo si el destino es una <b>pasarela hacia RS485</b> o si el equipo se satura
+        con peticiones muy seguidas.
+    </div>
+
     <hr/>
-    <div class="form-row" style="background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
+    <div id="rot-info-rtu" class="form-row" style="background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
         <i class="fa fa-info-circle" style="color:#7B5EA8"></i>&nbsp;
         Este cliente es <b>compartido</b> entre todos los nodos ROT Read y ROT Write
         que apunten al mismo conversor.<br>
@@ -76,28 +145,59 @@
         las peticiones y evitar colisiones en el bus RS485.
     </div>
 
+    <div id="rot-info-tcp" class="form-row" style="display:none;background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
+        <i class="fa fa-info-circle" style="color:#7B5EA8"></i>&nbsp;
+        Este cliente es <b>compartido</b> entre todos los nodos ROT Read y ROT Write
+        que apunten al mismo equipo.<br>
+        Usa <b>una sola conexión TCP persistente</b> y serializa las peticiones: se envía una
+        transacción y se espera su respuesta antes de mandar la siguiente. El
+        <b>Transaction ID</b> del MBAP descarta automáticamente las respuestas rezagadas.<br>
+        El <b>Slave/Unit ID</b> se configura en cada nodo Read/Write; en equipos TCP nativos
+        suele valer 1 (o 255) y en pasarelas es el ID real del esclavo serie.
+    </div>
+
 </script>
 
 <script type="text/html" data-help-name="rot-client">
-    <p>Nodo de configuración compartido para comunicaciones <b>Modbus RTU over TCP</b>.</p>
+    <p>Nodo de configuración compartido para comunicaciones <b>Modbus RTU over TCP</b>
+    y <b>Modbus TCP</b>.</p>
     <p>Gestiona una única conexión TCP persistente con cola interna de peticiones.
-    Todos los nodos <b>ROT Read</b> y <b>ROT Write</b> que apunten al mismo conversor
+    Todos los nodos <b>ROT Read</b> y <b>ROT Write</b> que apunten al mismo equipo
     deben usar el mismo cliente.</p>
+
+    <h3>Protocolos</h3>
+    <dl class="message-properties">
+        <dt>Modbus RTU over TCP</dt>
+        <dd>El frame serie completo (<code>[slave][FC][datos][CRC16]</code>) viaja tal cual
+        por el socket. Es lo que hacen los conversores RS485↔Ethernet transparentes.</dd>
+        <dt>Modbus TCP</dt>
+        <dd>Cabecera MBAP de 7 bytes (<code>[TID][Protocol=0][Length][UnitID]</code>) seguida
+        de la PDU, sin CRC. Es el estándar de PLCs y equipos con ethernet nativo.</dd>
+    </dl>
+    <p>El resto de la configuración y el comportamiento de los nodos Read/Write es idéntico
+    en ambos modos: mismos códigos de función, mismos registros, mismas salidas.</p>
 
     <h3>Ventajas</h3>
     <ul>
         <li>Una sola conexión TCP para todos los nodos — sin conflictos ni errores EACCES.</li>
         <li>Cola serializada — las peticiones de lectura y escritura nunca se solapan.</li>
-        <li>Reconexión automática si el conversor se desconecta.</li>
+        <li>Reconexión automática si el equipo se desconecta.</li>
+        <li>Descarte de respuestas rezagadas: por Transaction ID en TCP, por resincronización
+        de cabecera en RTU.</li>
     </ul>
 
     <h3>Configuración</h3>
     <dl class="message-properties">
+        <dt>Modo <span class="property-type">string</span></dt>
+        <dd><code>rtu</code> (RTU over TCP) o <code>tcp</code> (Modbus TCP).</dd>
         <dt>IP / Host <span class="property-type">string</span></dt>
-        <dd>Dirección IP o hostname del conversor RS485→TCP.</dd>
+        <dd>Dirección IP o hostname del conversor o del equipo Modbus.</dd>
         <dt>Puerto <span class="property-type">number</span></dt>
-        <dd>Puerto TCP del conversor. Por defecto 502.</dd>
+        <dd>Puerto TCP. Por defecto 502.</dd>
         <dt>Timeout <span class="property-type">number</span></dt>
         <dd>Tiempo máximo de espera por operación, en segundos.</dd>
+        <dt>Silencio entre tramas <span class="property-type">number</span></dt>
+        <dd>Pausa obligatoria entre transacciones, en ms. Imprescindible en RS485
+        (50 ms típico); normalmente 0 en Modbus TCP nativo.</dd>
     </dl>
 </script>
