@@ -1,14 +1,17 @@
 {
   "name": "node-red-contrib-rtu-over-tcp",
-  "version": "1.0.0",
-  "description": "Nodos Modbus RTU over TCP para Node-RED: cliente compartido, lectura y escritura",
+  "version": "1.1.0",
+  "description": "Nodos Modbus para Node-RED: RTU over TCP y Modbus TCP con cliente compartido, lectura y escritura",
   "keywords": [
     "node-red",
     "modbus",
+    "modbus-tcp",
     "rtu",
+    "rtu-over-tcp",
     "tcp",
     "rs485",
-    "serial"
+    "serial",
+    "mbap"
   ],
   "author": "Daniel Sierra",
   "license": "MIT",
@@ -22,7 +25,7 @@
   },
   "main": "rot-client.js",
   "scripts": {
-    "test": "node test/test-excepciones.js"
+    "test": "node test/test-excepciones.js && node test/test-modbus-tcp.js"
   },
   "engines": {
     "node": ">=14.0.0"

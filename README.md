@@ -8,12 +8,18 @@
 
 <p align="center">
   <b>Author:</b> Daniel Sierra<br>
-  <b>Description:</b> Node-RED nodes to read and write Modbus registers over <b>RTU over TCP</b>
+  <b>Description:</b> Node-RED nodes to read and write Modbus registers over <b>RTU over TCP</b> and <b>Modbus TCP</b>
 </p>
 
 ---
 
-Full RTU frame with CRC16 over a raw TCP socket.  
+Two protocols behind the same node interface, selectable from the client:
+
+| Mode | Frame sent | Intended devices |
+|------|------------|------------------|
+| **RTU over TCP** | `[slaveId] + PDU + CRC16` | Transparent serial↔ethernet converters (Teltonika TRB, USR, Elfin, HF2211…) |
+| **Modbus TCP** | `MBAP(7 bytes) + PDU`, no CRC | PLCs, power analyzers, drives, remote I/O and gateways that translate to MBAP |
+
 **Persistent TCP connection with automatic reconnection** and a serialized request queue.
 
 ---
@@ -25,7 +31,7 @@ This package is distributed as a `.tgz` file. The download and installation step
 ### 1. Download the package
 
 1. Go to the **Releases** tab of the repository
-2. Select version **v1.0.0**
+2. Select version **v1.1.0**
 3. Download the attached `.tgz` file
 
 ### 2. Install in Node-RED
@@ -55,12 +61,12 @@ This package is distributed as a `.tgz` file. The download and installation step
 | Field    | Description                                    | Example       |
 |----------|------------------------------------------------|---------------|
 | Name     | Optional label for the node                    | My gateway    |
-| IP / Host| IP address or hostname of the TCP converter    | 192.168.1.100 |
-| Port     | TCP port of the converter                      | 502           |
+| Mode     | `RTU over TCP` (RTU frame + CRC) or `Modbus TCP` (MBAP header) | RTU over TCP |
+| IP / Host| IP address or hostname of the converter or Modbus device | 192.168.1.100 |
+| Port     | TCP port. Defaults to 502                      | 502           |
 | Timeout  | Maximum wait time for a response, in seconds   | 5             |
 
 > **Note:** Every `rot-read` and `rot-write` node must select an existing `ROT Client`.
-
 ### ROT Read
 
 | Field           | Description                                                          | Example       |
@@ -167,7 +173,7 @@ msg.payload  = 1234;            // single value (for FC05/FC06)
 
 ## TCP connection behavior
 
-The `rot-client` node keeps a **persistent TCP connection** with the converter:
+The `rot-client` node keeps a **persistent TCP connection** with the device:
 
 - It connects on the first trigger, or on startup if polling is active.
 - Requests are queued and executed serially (one at a time), avoiding collisions on the RS485 bus.
@@ -177,10 +183,41 @@ The `rot-client` node keeps a **persistent TCP connection** with the converter:
 
 ---
 
+## Choosing the protocol
+
+It is set in the **rot-client** node, **Mode** field. The `rot-read` and `rot-write` nodes
+do not change: same function codes, same registers, same outputs.
+
+Configurations created before 1.1.0 have no value stored for this field and are read as
+**RTU over TCP**, so existing flows keep working exactly as before.
+
+**How to tell whether the mode is right:** if the device answers but the node reports
+`CRC inválido`, try Modbus TCP; if it reports `Cabecera MBAP inválida`, try RTU over TCP.
+
+### Slave ID / Unit ID
+
+It is the same field of the Read/Write node in both modes. In RTU it is the address of the
+slave on the RS485 bus; in Modbus TCP it is the MBAP Unit ID, which devices with native
+ethernet usually ignore (typically `1` or `255`) and gateways use as the real slave id.
+
+### Silence between frames
+
+In RTU it is mandatory (t3.5): the slave needs to release the RS485 line before the next
+request. In native Modbus TCP there is no bus to drain, so the defaults are **0 ms** after
+a successful operation and **200 ms** after a failure; raise them only if the target is a
+gateway towards RS485 or if the device gets saturated.
+
+---
+
 ## Expected response bytes
 
-For `N` registers the RTU response is exactly `3 + N × 2 + 2` bytes.  
-The panel shows this value dynamically as you edit the **Count** field.
+For `N` registers the response is exactly:
+
+- **RTU over TCP:** `3 + N × 2 + 2` bytes (slave + FC + byteCount + data + CRC)
+- **Modbus TCP:** `9 + N × 2` bytes (MBAP 7 + FC + byteCount + data)
+
+The Read node panel shows this value dynamically as you edit the **Count** field, adjusted
+to the protocol of the selected client.
 
 ---
 
@@ -188,6 +225,32 @@ The panel shows this value dynamically as you edit the **Count** field.
 
 - Node-RED **≥ 2.0.0**
 - Node.js **≥ 14.0.0**
+
+---
+
+## Changes in 1.1.0
+
+### Modbus TCP support
+
+The client now speaks both protocols through the **Mode** field. Internally the code was
+reorganized into three layers: **shared** PDU builders and data decoders, plus a
+wrap/extract layer specific to each protocol. The RTU logic (header resynchronization,
+exception handling, fragment reassembly) is left intact.
+
+Details of TCP mode:
+
+- The **Transaction ID** is assigned at send time, not when queueing, so a retry after a
+  reconnection never reuses a stale TID.
+- Late responses are discarded whole frame at a time by comparing the TID, instead of byte
+  by byte as in RTU.
+- Framing uses the MBAP *Length* field, so reassembling fragmented responses is
+  deterministic.
+- The response FC and `byteCount` are validated, since without CRC they are the only
+  consistency checks left.
+- An impossible MBAP header fails immediately and suggests checking the protocol, instead
+  of waiting out the timeout.
+
+New test bench in `test/test-modbus-tcp.js` (9 blocks). `npm test` runs both suites.
 
 ---
 
