@@ -1,19 +1,22 @@
 module.exports = function (RED) {
 
     // ════════════════════════════════════════════════════════════════════════
-    // DOS PROTOCOLOS, UNA SOLA LOGICA
+    // TRES MODOS, UNA SOLA LOGICA
     //
-    // Modbus RTU over TCP y Modbus TCP comparten EXACTAMENTE la misma PDU
-    // (el bloque [FC][datos...]). Lo unico que cambia es el envoltorio:
+    // Todas las variantes de Modbus comparten EXACTAMENTE la misma PDU (el
+    // bloque [FC][datos...]). Lo unico que cambia es el envoltorio y el medio:
     //
-    //   RTU over TCP : [slaveId] + PDU + [CRC_L][CRC_H]
-    //   Modbus TCP   : [tid_H][tid_L][proto_H][proto_L][len_H][len_L][unitId] + PDU
+    //   RTU over TCP : [slaveId] + PDU + [CRC_L][CRC_H]      por socket TCP
+    //   Modbus RTU   : [slaveId] + PDU + [CRC_L][CRC_H]      por puerto serie
+    //   Modbus TCP   : [tid][proto=0][len][unitId] + PDU     por socket TCP
     //                  (cabecera MBAP de 7 bytes, sin CRC)
     //
-    // Por eso el codigo esta partido en tres capas:
-    //   1. Constructores de PDU           -> comunes a los dos protocolos
-    //   2. Envoltorio (wrap) y extraccion -> especifico de cada protocolo
-    //   3. Decodificadores de datos       -> comunes a los dos protocolos
+    // RTU over TCP y RTU serie son la MISMA trama: solo cambia el cable. Por
+    // eso el codigo esta partido en capas:
+    //   1. Constructores de PDU           -> comunes a todos los modos
+    //   2. Envoltorio (wrap) y extraccion -> segun la trama (RTU / MBAP)
+    //   3. Decodificadores de datos       -> comunes a todos los modos
+    //   4. Transporte                     -> segun el medio (TCP / serie)
     // ════════════════════════════════════════════════════════════════════════
 
     // ── Utilidades RTU ────────────────────────────────────────────────────────
@@ -275,31 +278,95 @@ module.exports = function (RED) {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // TcpQueue — cola serializada sobre un socket persistente
-    // Un único socket compartido entre todos los nodos que usen este cliente.
-    // Las peticiones se encolan y se envían de una en una para evitar
-    // colisiones en el bus RS485 (modo RTU) y para no depender de que el
-    // esclavo TCP soporte transacciones concurrentes (muchos equipos no).
+    // Utilidades del puerto serie
     // ════════════════════════════════════════════════════════════════════════
-    class TcpQueue {
-        constructor(host, port, timeout, onStatus, gapMs, gapErrMs, protocol) {
-            this.host     = host;
-            this.port     = port;
-            this.timeout  = timeout;   // ms
-            this.onStatus = onStatus;  // (fill, shape, text) => {}
 
-            // 'rtu' = RTU over TCP (frame RTU crudo sobre el socket)
-            // 'tcp' = Modbus TCP    (cabecera MBAP, sin CRC)
-            this.protocol = (protocol === 'tcp') ? 'tcp' : 'rtu';
+    // 'serialport' es dependencia OPCIONAL y se carga solo cuando un cliente
+    // usa el modo serie: quien trabaje solo por TCP no necesita el modulo
+    // nativo, y si su compilacion falla en alguna plataforma rara, el resto
+    // del paquete sigue funcionando.
+    function cargarSerialPort() {
+        try {
+            return require('serialport').SerialPort;
+        } catch (e) {
+            const err = new Error('Falta el módulo "serialport". Instálalo en el directorio ' +
+                'de usuario de Node-RED (~/.node-red) con: npm install serialport');
+            err.fatal = true;
+            throw err;
+        }
+    }
+
+    // t3.5 del estandar Modbus RTU: 3,5 caracteres de 11 bits. Por encima de
+    // 19200 baudios el estandar lo fija en 1,75 ms.
+    function t35ms(baudios) {
+        return baudios > 19200 ? 1.75 : (3.5 * 11 * 1000) / baudios;
+    }
+
+    // Los errores del SO son poco claros ("Error: Error: Resource temporarily
+    // unavailable Cannot lock port"). Se traducen a algo accionable.
+    function traducirErrorSerie(err, ruta) {
+        const m = String(err && err.message || err);
+        if (/No such file|ENOENT|cannot find|File not found/i.test(m))
+            return 'Puerto no encontrado · ' + ruta + ' (¿adaptador desconectado?)';
+        if (/Permission denied|EACCES|Access denied/i.test(m))
+            return 'Sin permiso sobre ' + ruta + ' (Linux: añade el usuario de Node-RED al grupo dialout)';
+        if (/lock|busy|temporarily unavailable|EBUSY/i.test(m))
+            return 'Puerto ocupado · ' + ruta + ' (lo usa otro proceso u otro cliente)';
+        return m + ' · ' + ruta;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // ModbusQueue — cola serializada sobre un enlace persistente
+    //
+    // Dos ejes independientes:
+    //   transporte : 'tcp' (socket)       | 'serial' (puerto serie local)
+    //   trama      : 'rtu' (slave + CRC)  | 'mbap'   (cabecera Modbus TCP)
+    //
+    //   Modo del panel     transporte   trama
+    //   ─────────────────  ───────────  ──────
+    //   RTU over TCP       tcp          rtu
+    //   Modbus TCP         tcp          mbap
+    //   Modbus RTU serie   serial       rtu
+    //
+    // Un único enlace compartido entre todos los nodos que usen este cliente.
+    // Las peticiones se encolan y se envían de una en una para evitar
+    // colisiones en el bus RS485 y para no depender de que el esclavo TCP
+    // soporte transacciones concurrentes (muchos equipos no).
+    // ════════════════════════════════════════════════════════════════════════
+    class ModbusQueue {
+        // opts = { protocol, host, port, serial:{path,baudRate,dataBits,parity,stopBits,echo},
+        //          timeout, gapMs, gapErrMs, onStatus }
+        constructor(opts) {
+            this.timeout  = opts.timeout;    // ms
+            this.onStatus = opts.onStatus;   // (fill, shape, text) => {}
+
+            // Modo -> (transporte, trama). 'rtu' es el valor historico y el
+            // que se asume en configuraciones antiguas sin este campo.
+            const modo = opts.protocol;
+            this.protocol   = (modo === 'tcp' || modo === 'serial') ? modo : 'rtu';
+            this.transporte = this.protocol === 'serial' ? 'serial' : 'tcp';
+            this.trama      = this.protocol === 'tcp'    ? 'mbap'   : 'rtu';
+
+            this.host   = opts.host;
+            this.port   = opts.port;
+            this.serial = opts.serial || {};
 
             // Silencio entre tramas. 50 ms cubre el t3.5 de sobra a 9600 baudios
             // y sigue permitiendo un sondeo rapido; subelo si el bus es largo,
             // tiene muchos slaves o el gateway es lento. En Modbus TCP nativo no
             // hay bus serie que drenar y lo normal es dejarlo en 0.
-            this.gapMs    = gapMs    !== undefined ? gapMs    : 50;
-            this.gapErrMs = gapErrMs !== undefined ? gapErrMs : 500;
+            this.gapMs    = opts.gapMs    !== undefined ? opts.gapMs    : 50;
+            this.gapErrMs = opts.gapErrMs !== undefined ? opts.gapErrMs : 500;
 
-            this._socket         = null;
+            // En serie el silencio NUNCA puede bajar del t3.5 real del bus: con
+            // un gap de 0 el esclavo veria dos peticiones como una sola trama.
+            if (this.transporte === 'serial') {
+                const minimo = Math.ceil(t35ms(this.serial.baudRate || 9600));
+                this.gapMs    = Math.max(this.gapMs,    minimo);
+                this.gapErrMs = Math.max(this.gapErrMs, minimo);
+            }
+
+            this._socket         = null;   // net.Socket o SerialPort
             this._rxBuf          = Buffer.alloc(0);
             this._queue          = [];
             this._active         = null;
@@ -308,8 +375,9 @@ module.exports = function (RED) {
             this._reconnectTimer = null;
             this._gapTimer       = null;
             this._lastFallo      = false;
-            this._subscribers    = 0;   // nodos conectados a este cliente
-            this._tid            = 0;   // Transaction ID (solo Modbus TCP)
+            this._subscribers    = 0;      // nodos conectados a este cliente
+            this._tid            = 0;      // Transaction ID (solo Modbus TCP)
+            this._cierre         = null;   // promesa del cierre fisico en curso
         }
 
         // Transaction ID incremental, 1..65535. Se evita el 0 para que un
@@ -320,15 +388,34 @@ module.exports = function (RED) {
         }
 
         get etiquetaProto() {
-            return this.protocol === 'tcp' ? 'Modbus TCP' : 'RTU over TCP';
+            if (this.protocol === 'tcp')    return 'Modbus TCP';
+            if (this.protocol === 'serial') return 'RTU serie';
+            return 'RTU over TCP';
+        }
+
+        get destino() {
+            if (this.transporte === 'serial') {
+                const s = this.serial;
+                const paridad = { none: 'N', even: 'E', odd: 'O', mark: 'M', space: 'S' }[s.parity] || 'N';
+                return s.path + ' · ' + s.baudRate + ' ' + s.dataBits + paridad + s.stopBits;
+            }
+            return this.host + ':' + this.port;
+        }
+
+        _enlaceVivo() {
+            return !!(this._socket && !this._socket.destroyed);
         }
 
         // ── Conexión ──────────────────────────────────────────────────────────
         _connect() {
-            if (this._socket && !this._socket.destroyed) return;
+            if (this._enlaceVivo()) return;
             if (this._connecting) return;
             this._connecting = true;
+            if (this.transporte === 'serial') this._abrirSerie();
+            else                              this._abrirTcp();
+        }
 
+        _abrirTcp() {
             const net    = require('net');
             const socket = new net.Socket();
             socket.setNoDelay(true);
@@ -343,15 +430,11 @@ module.exports = function (RED) {
                 this._connecting = false;
                 this._socket     = socket;
                 this._rxBuf      = Buffer.alloc(0);
-                this.onStatus('green', 'dot',
-                    'conectado · ' + this.host + ':' + this.port + ' · ' + this.etiquetaProto);
+                this.onStatus('green', 'dot', 'conectado · ' + this.destino + ' · ' + this.etiquetaProto);
                 this._flush();
             });
 
-            socket.on('data', chunk => {
-                this._rxBuf = Buffer.concat([this._rxBuf, chunk]);
-                this._tryParse();
-            });
+            socket.on('data', chunk => this._alRecibir(chunk));
 
             socket.on('error', err => {
                 const codes = {
@@ -370,12 +453,121 @@ module.exports = function (RED) {
             this._socket = socket;
         }
 
-        _handleDisconnect(err) {
-            if (this._socket) {
-                this._socket.removeAllListeners();
-                if (!this._socket.destroyed) this._socket.destroy();
-                this._socket = null;
+        _abrirSerie() {
+            let SerialPort;
+            try {
+                SerialPort = cargarSerialPort();
+            } catch (e) {
+                this._handleDisconnect(e);
+                return;
             }
+
+            const s = this.serial;
+            let puerto;
+            try {
+                puerto = new SerialPort({
+                    path:     s.path,
+                    baudRate: s.baudRate,
+                    dataBits: s.dataBits,
+                    parity:   s.parity,
+                    stopBits: s.stopBits,
+                    autoOpen: false
+                });
+            } catch (e) {
+                // Opciones invalidas (ruta vacia, baudios raros...): no tiene
+                // sentido reintentar cada 2 s con la misma configuracion. La
+                // marca va en el error que se PROPAGA, no en el original.
+                const fatal = new Error('Configuración serie inválida: ' + e.message);
+                fatal.fatal = true;
+                this._handleDisconnect(fatal);
+                return;
+            }
+            puerto._rotSerie  = true;
+            puerto._abriendo  = true;
+            puerto._alLiberar = null;   // lo fija _soltarEnlace si cierra a mitad
+            this._socket = puerto;
+
+            puerto.open(err => {
+                puerto._abriendo = false;
+                // Si mientras se abria el cliente se cerro o se reemplazo el
+                // puerto, este ya no es nuestro: cerrarlo para no dejar el
+                // descriptor abierto y el lock tomado, y AVISAR a quien espera
+                // el cierre solo cuando el puerto este liberado de verdad.
+                if (this._socket !== puerto) {
+                    const liberado = () => { if (puerto._alLiberar) puerto._alLiberar(); };
+                    if (!err && puerto.isOpen) puerto.close(() => liberado());
+                    else liberado();
+                    return;
+                }
+                if (err) {
+                    this._handleDisconnect(new Error(traducirErrorSerie(err, s.path)));
+                    return;
+                }
+                this._connecting = false;
+                this._rxBuf      = Buffer.alloc(0);
+                this.onStatus('green', 'dot', 'abierto · ' + this.destino + ' · ' + this.etiquetaProto);
+                this._flush();
+            });
+
+            puerto.on('data',  chunk => this._alRecibir(chunk));
+            puerto.on('error', err   => this._handleDisconnect(new Error(traducirErrorSerie(err, s.path))));
+            // 'close' con error = adaptador USB arrancado en caliente
+            puerto.on('close', err   => {
+                if (this._closed) return;
+                this._handleDisconnect(new Error(err && err.disconnected
+                    ? 'Puerto serie desconectado · ' + s.path
+                    : 'Puerto serie cerrado · ' + s.path));
+            });
+        }
+
+        _alRecibir(chunk) {
+            this._rxBuf = Buffer.concat([this._rxBuf, chunk]);
+            this._tryParse();
+        }
+
+        // Suelta el enlace actual y devuelve una promesa que se cumple cuando
+        // el recurso fisico esta liberado de verdad.
+        //
+        // IMPORTANTE en serie: SerialPort.destroy() NO cierra el puerto (el
+        // stream no implementa _destroy), dejaria el descriptor y el lock del
+        // SO tomados, y el siguiente open() fallaria con "Cannot lock port".
+        // Hay que usar close(). Y hay que ESPERARLO: en un deploy, el cliente
+        // nuevo abre la misma ruta nada mas cerrarse el viejo.
+        _soltarEnlace() {
+            const s = this._socket;
+            this._socket = null;
+            if (!s) return Promise.resolve();
+            s.removeAllListeners();
+            // Un error tardio durante el cierre no debe tumbar Node-RED por
+            // quedarse sin listener.
+            s.on('error', () => {});
+
+            return new Promise(resolve => {
+                // Red de seguridad para no bloquear un deploy si el SO nunca
+                // contesta. Holgada: un open()+close() serie tarda milisegundos.
+                const guarda = setTimeout(resolve, 3000);
+                const listo  = () => { clearTimeout(guarda); resolve(); };
+                if (s._rotSerie) {
+                    if (s._abriendo) {
+                        // open() en curso: aun no se puede cerrar. Su callback
+                        // lo cerrara (ya no es el puerto activo) y llamara a
+                        // listo() al terminar. Resolver ahora daria el puerto
+                        // por libre cuando todavia esta a medio abrir.
+                        s._alLiberar = listo;
+                    } else if (s.isOpen) {
+                        s.close(() => listo());
+                    } else {
+                        listo();
+                    }
+                } else {
+                    if (s.destroyed) listo();
+                    else { s.once('close', listo); s.destroy(); }
+                }
+            });
+        }
+
+        _handleDisconnect(err) {
+            this._cierre     = this._soltarEnlace();
             this._connecting = false;
             this._rxBuf      = Buffer.alloc(0);
 
@@ -385,14 +577,28 @@ module.exports = function (RED) {
                 this._active = null;
             }
 
+            // Lo encolado tambien falla YA. El timeout de cada peticion solo
+            // arranca al enviarla, asi que sin enlace se quedaba esperando sin
+            // limite: con un rot-read en polling la cola crecia mientras el
+            // equipo estaba caido y al reconectar salia una rafaga de lecturas
+            // viejas. Mejor que cada disparo reciba su error por la salida 3.
+            this._queue.forEach(r => r.reject(err));
+            this._queue = [];
+
+            // Error sin arreglo reintentando (falta el modulo, config invalida):
+            // no se programa reconexion.
+            if (err.fatal) {
+                if (!this._closed) this.onStatus('red', 'ring', err.message);
+                return;
+            }
+
             if (this._closed) return;
             this.onStatus('red', 'ring', err.message);
 
-            // Reconexion automatica. Antes solo se reintentaba si quedaban
-            // peticiones en cola: si el socket caia estando el bus en reposo,
-            // nadie reconectaba y la primera lectura posterior se comia un
-            // timeout entero antes de que _connect() lo arreglara de rebote.
-            if ((this._queue.length > 0 || this._subscribers > 0) && !this._reconnectTimer) {
+            // Reconexion automatica mientras haya nodos suscritos. Si el socket
+            // caia estando el bus en reposo y nadie reconectaba, la primera
+            // lectura posterior se comia un timeout entero.
+            if (this._subscribers > 0 && !this._reconnectTimer) {
                 this._reconnectTimer = setTimeout(() => {
                     this._reconnectTimer = null;
                     if (!this._closed) this._connect();
@@ -407,7 +613,7 @@ module.exports = function (RED) {
             // entre por enqueue() durante el gap no debe pisar la linea antes de
             // tiempo. El propio temporizador del gap llamara a _flush al vencer.
             if (this._gapTimer) return;
-            if (!this._socket || this._socket.destroyed) { this._connect(); return; }
+            if (!this._enlaceVivo()) { this._connect(); return; }
             if (this._connecting) return;   // el callback de connect hara el flush
 
             const req    = this._queue.shift();
@@ -419,12 +625,19 @@ module.exports = function (RED) {
             // encolar, un reintento tras reconexion reutilizaria un TID viejo y
             // una respuesta rezagada podria colarse como valida.
             let frame;
-            if (this.protocol === 'tcp') {
+            if (this.trama === 'mbap') {
                 req.tid = this._nextTid();
                 frame   = wrapTCP(req.tid, req.deviceId, req.pdu);
             } else {
                 frame   = wrapRTU(req.deviceId, req.pdu);
             }
+
+            // ECO LOCAL. Muchos adaptadores USB-RS485 baratos (y algunos HATs
+            // de Raspberry) devuelven por RX lo que transmiten. El eco empieza
+            // por [slave][fc] igual que la respuesta real, asi que la
+            // resincronizacion lo tomaria por bueno y daria CRC invalido. Con
+            // la opcion activada se descartan exactamente esos bytes.
+            req.eco = (this.transporte === 'serial' && this.serial.echo) ? frame.length : 0;
 
             req.timer = setTimeout(() => {
                 this._active = null;
@@ -448,8 +661,8 @@ module.exports = function (RED) {
 
         _tryParse() {
             if (!this._active) return;
-            if (this.protocol === 'tcp') this._tryParseTCP();
-            else                         this._tryParseRTU();
+            if (this.trama === 'mbap') this._tryParseTCP();
+            else                       this._tryParseRTU();
         }
 
         // ── Recepción Modbus TCP ──────────────────────────────────────────────
@@ -532,9 +745,18 @@ module.exports = function (RED) {
             this._scheduleFlush(this._lastFallo ? this.gapErrMs : this.gapMs);
         }
 
-        // ── Recepción RTU over TCP ────────────────────────────────────────────
+        // ── Recepción RTU (over TCP o serie) ──────────────────────────────────
         _tryParseRTU() {
             const req = this._active;
+
+            // Descartar el eco local de nuestra propia peticion (solo serie, y
+            // solo si esta activada la opcion). Puede llegar troceado.
+            if (req.eco > 0) {
+                const n = Math.min(req.eco, this._rxBuf.length);
+                this._rxBuf = this._rxBuf.slice(n);
+                req.eco -= n;
+                if (req.eco > 0 || this._rxBuf.length === 0) return;
+            }
 
             // RESINCRONIZACION DE TRAMA.
             //
@@ -655,7 +877,7 @@ module.exports = function (RED) {
                     { resolve, reject }
                 ));
                 this._connect();
-                if (this._socket && !this._socket.destroyed && !this._connecting)
+                if (this._enlaceVivo() && !this._connecting)
                     this._flush();
             });
         }
@@ -671,19 +893,89 @@ module.exports = function (RED) {
             if (this._subscribers <= 0) this.destroy();
         }
 
+        // Devuelve una promesa que se cumple cuando el enlace fisico queda
+        // liberado. Llamarla dos veces (unsubscribe + close del nodo) devuelve
+        // el mismo cierre pendiente en vez de darlo por hecho antes de tiempo.
         destroy() {
             this._closed = true;
+            this._connecting = false;
             if (this._reconnectTimer) { clearTimeout(this._reconnectTimer); this._reconnectTimer = null; }
             if (this._gapTimer) { clearTimeout(this._gapTimer); this._gapTimer = null; }
             if (this._active) { clearTimeout(this._active.timer); this._active.reject(new Error('Cliente cerrado')); this._active = null; }
             this._queue.forEach(r => r.reject(new Error('Cliente cerrado')));
             this._queue = [];
-            if (this._socket) {
-                this._socket.removeAllListeners();
-                if (!this._socket.destroyed) this._socket.destroy();
-                this._socket = null;
+            if (this._socket) this._cierre = this._soltarEnlace();
+            return this._cierre || Promise.resolve();
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Listado de puertos serie para el editor
+    // ════════════════════════════════════════════════════════════════════════
+
+    function hayEjecutable(nombre) {
+        const fs   = require('fs');
+        const path = require('path');
+        return (process.env.PATH || '').split(path.delimiter)
+            .some(dir => dir && fs.existsSync(path.join(dir, nombre)));
+    }
+
+    async function listarPuertos() {
+        const fs = require('fs');
+        const vistos = new Map();   // ruta -> { path, info }
+
+        // 1) Nombres ESTABLES primero. /dev/ttyUSB0 puede pasar a ser ttyUSB1
+        //    tras un reinicio o al enchufar otro adaptador; la ruta by-id
+        //    identifica al adaptador concreto y no cambia nunca.
+        if (process.platform === 'linux') {
+            try {
+                for (const f of fs.readdirSync('/dev/serial/by-id')) {
+                    const ruta = '/dev/serial/by-id/' + f;
+                    let real = '';
+                    try { real = fs.realpathSync(ruta); } catch (e) { /* enlace roto */ }
+                    vistos.set(ruta, { path: ruta, info: 'estable' + (real ? ' → ' + real : '') });
+                }
+            } catch (e) { /* no hay adaptadores USB */ }
+            for (const alias of ['/dev/serial0', '/dev/serial1']) {   // Raspberry Pi
+                if (fs.existsSync(alias)) vistos.set(alias, { path: alias, info: 'UART Raspberry Pi' });
             }
         }
+
+        // 2) Listado de serialport. En Linux depende de 'udevadm': si no existe
+        //    (contenedores Docker, Alpine) el modulo lanza una excepcion NO
+        //    capturable al hacer spawn y tumbaria Node-RED entero. Por eso se
+        //    comprueba antes y, si falta, se escanea /dev a mano.
+        let SerialPort = null;
+        try { SerialPort = require('serialport').SerialPort; } catch (e) { /* no instalado */ }
+        const listadoSeguro = SerialPort && (process.platform !== 'linux' || hayEjecutable('udevadm'));
+
+        if (listadoSeguro) {
+            try {
+                for (const p of await SerialPort.list()) {
+                    if (vistos.has(p.path)) continue;
+                    const info = [p.manufacturer, p.serialNumber].filter(Boolean).join(' · ');
+                    vistos.set(p.path, { path: p.path, info });
+                }
+            } catch (e) { /* seguimos con lo que haya */ }
+        } else if (process.platform === 'linux') {
+            try {
+                fs.readdirSync('/dev')
+                    .filter(n => /^tty(USB|ACM|AMA|XRUSB|WCH|MFD|O)\d+$/.test(n))
+                    .sort()
+                    .forEach(n => { const r = '/dev/' + n; if (!vistos.has(r)) vistos.set(r, { path: r, info: '' }); });
+            } catch (e) { /* sin acceso a /dev */ }
+        }
+
+        return { disponible: !!SerialPort, puertos: Array.from(vistos.values()) };
+    }
+
+    if (RED.httpAdmin) {
+        RED.httpAdmin.get('/rot-client/puertos',
+            RED.auth.needsPermission('rot-client.read'),
+            async function (req, res) {
+                try { res.json(await listarPuertos()); }
+                catch (e) { res.json({ disponible: false, puertos: [], error: e.message }); }
+            });
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -693,13 +985,23 @@ module.exports = function (RED) {
         RED.nodes.createNode(this, config);
         const node = this;
 
+        // Modo. Por defecto 'rtu' (RTU over TCP) para no romper las
+        // configuraciones ya existentes, que no tienen este campo guardado.
+        node.protocol = (config.protocol === 'tcp' || config.protocol === 'serial')
+                      ? config.protocol : 'rtu';
+
         node.host    = config.host;
-        node.port    = parseInt(config.port)    || 502;
+        node.port    = parseInt(config.port) || 502;
         node.timeout = (parseFloat(config.timeout) || 5) * 1000;  // seg → ms
 
-        // Protocolo. Por defecto 'rtu' para no romper las configuraciones ya
-        // existentes, que no tienen este campo guardado.
-        node.protocol = (config.protocol === 'tcp') ? 'tcp' : 'rtu';
+        node.serial = {
+            path:     config.serialPort || '',
+            baudRate: parseInt(config.baudRate) || 9600,
+            dataBits: parseInt(config.dataBits) || 8,
+            parity:   ['none', 'even', 'odd', 'mark', 'space'].includes(config.parity) ? config.parity : 'none',
+            stopBits: parseInt(config.stopBits) === 2 ? 2 : 1,
+            echo:     config.echo === true || config.echo === 'true'
+        };
 
         // Silencio entre tramas, en ms. Configurable desde el panel; si el campo
         // no existe (config antigua) se usan los valores por defecto. En Modbus
@@ -711,19 +1013,18 @@ module.exports = function (RED) {
         node.gapErr = config.gapError !== undefined && config.gapError !== ''
                     ? parseInt(config.gapError) : gapErrDef;
 
-        // Una sola instancia de TcpQueue por nodo de configuración
-        node._queue = new TcpQueue(
-            node.host,
-            node.port,
-            node.timeout,
-            (fill, shape, text) => {
-                // Propagar estado a todos los nodos suscriptores
-                node.emit('status', { fill, shape, text });
-            },
-            node.gap,
-            node.gapErr,
-            node.protocol
-        );
+        // Una sola cola por nodo de configuración
+        node._queue = new ModbusQueue({
+            protocol: node.protocol,
+            host:     node.host,
+            port:     node.port,
+            serial:   node.serial,
+            timeout:  node.timeout,
+            gapMs:    node.gap,
+            gapErrMs: node.gapErr,
+            // Propagar estado a todos los nodos suscriptores
+            onStatus: (fill, shape, text) => node.emit('status', { fill, shape, text })
+        });
 
         // ── Métodos públicos que usan rot-read y rot-write ────────────────────
 
@@ -779,7 +1080,13 @@ module.exports = function (RED) {
         node.subscribe   = () => node._queue.subscribe();
         node.unsubscribe = () => node._queue.unsubscribe();
 
-        node.on('close', () => node._queue.destroy());
+        // Node-RED espera a 'done' antes de arrancar los flujos nuevos. En
+        // serie es imprescindible: el cliente del siguiente deploy abre la
+        // MISMA ruta y fallaria con "puerto ocupado" si el viejo no ha
+        // terminado de cerrarla.
+        node.on('close', function (removed, done) {
+            node._queue.destroy().then(() => done(), () => done());
+        });
     }
 
     RED.nodes.registerType('rot-client', RotClientNode);

@@ -1,63 +1,138 @@
 <script type="text/javascript">
-    RED.nodes.registerType('rot-client', {
-        category: 'config',
-        defaults: {
-            name:     { value: '' },
-            // 'rtu' = Modbus RTU over TCP (comportamiento clásico)
-            // 'tcp' = Modbus TCP (cabecera MBAP)
-            // Las configuraciones antiguas no tienen este campo: el backend
-            // asume 'rtu' cuando falta, así que siguen funcionando igual.
-            protocol: { value: 'rtu', required: true },
-            host:     { value: '192.168.1.1', required: true },
-            port:     { value: 502,           required: true, validate: RED.validators.number() },
-            timeout:  { value: 5,   required: true, validate: RED.validators.number() },
-            gap:      { value: 50,  required: false, validate: RED.validators.number(true) },
-            gapError: { value: 500, required: false, validate: RED.validators.number(true) }
-        },
-        label: function () {
-            const proto = (this.protocol === 'tcp') ? 'TCP' : 'RTU';
-            return this.name || (this.host + ':' + this.port + ' · ' + proto);
-        },
+    (function () {
+        const esSerie = (n) => n.protocol === 'serial';
 
-        oneditprepare: function () {
-            const aplicarProtocolo = (cambioManual) => {
-                const esTcp = $('#node-config-input-protocol').val() === 'tcp';
+        RED.nodes.registerType('rot-client', {
+            category: 'config',
+            defaults: {
+                name:       { value: '' },
+                // 'rtu'    = Modbus RTU over TCP (comportamiento clásico)
+                // 'tcp'    = Modbus TCP (cabecera MBAP)
+                // 'serial' = Modbus RTU por puerto serie local
+                // Las configuraciones antiguas no tienen este campo: el backend
+                // asume 'rtu' cuando falta, así que siguen funcionando igual.
+                protocol:   { value: 'rtu', required: true },
 
-                $('#rot-gap-title').text(esTcp
-                    ? 'Silencio entre tramas (opcional)'
-                    : 'Silencio entre tramas (RS485)');
+                // ── TCP ──
+                host:       { value: '192.168.1.1',
+                              validate: function (v) { return esSerie(this) || !!v; } },
+                port:       { value: 502,
+                              validate: function (v) { return esSerie(this) || RED.validators.number()(v); } },
 
-                $('#rot-gap-rtu').toggle(!esTcp);
-                $('#rot-gap-tcp').toggle(esTcp);
-                $('#rot-info-rtu').toggle(!esTcp);
-                $('#rot-info-tcp').toggle(esTcp);
+                // ── Serie ──
+                serialPort: { value: '',
+                              validate: function (v) { return !esSerie(this) || !!v; } },
+                baudRate:   { value: 9600,
+                              validate: function (v) { return !esSerie(this) || (parseInt(v) > 0); } },
+                dataBits:   { value: 8 },
+                parity:     { value: 'none' },
+                stopBits:   { value: 1 },
+                echo:       { value: false },
 
-                // Al cambiar de modo a mano, ajustar los gaps SOLO si siguen
-                // en el valor por defecto del otro modo. Si el usuario los ha
-                // tocado, se respetan.
-                if (!cambioManual) return;
-                const gap    = $('#node-config-input-gap');
-                const gapErr = $('#node-config-input-gapError');
-                if (esTcp) {
-                    if (gap.val()    === '50')  gap.val(0);
-                    if (gapErr.val() === '500') gapErr.val(200);
-                } else {
-                    if (gap.val()    === '0')   gap.val(50);
-                    if (gapErr.val() === '200') gapErr.val(500);
+                // ── Comunes ──
+                timeout:    { value: 5,   required: true,  validate: RED.validators.number() },
+                gap:        { value: 50,  required: false, validate: RED.validators.number(true) },
+                gapError:   { value: 500, required: false, validate: RED.validators.number(true) }
+            },
+            label: function () {
+                if (this.name) return this.name;
+                if (esSerie(this)) {
+                    const par = { none: 'N', even: 'E', odd: 'O', mark: 'M', space: 'S' }[this.parity] || 'N';
+                    const ruta = (this.serialPort || '?').replace('/dev/serial/by-id/', '…/');
+                    return ruta + ' · ' + this.baudRate + ' ' + this.dataBits + par + this.stopBits + ' · RTU';
                 }
-            };
+                return this.host + ':' + this.port + ' · ' + (this.protocol === 'tcp' ? 'TCP' : 'RTU/TCP');
+            },
 
-            $('#node-config-input-protocol').on('change', () => aplicarProtocolo(true));
-            aplicarProtocolo(false);
-        }
-    });
+            oneditprepare: function () {
+                const $modo   = $('#node-config-input-protocol');
+                const $gap    = $('#node-config-input-gap');
+                const $gapErr = $('#node-config-input-gapError');
+
+                // Valores por defecto de los gaps en cada modo
+                const GAPS = { rtu: [50, 500], serial: [50, 500], tcp: [0, 200] };
+                let modoPrevio = $modo.val();
+
+                const t35 = () => {
+                    const b = parseInt($('#node-config-input-baudRate').val()) || 9600;
+                    return b > 19200 ? 1.75 : 3.5 * 11 * 1000 / b;
+                };
+
+                const refrescar = () => {
+                    const m = $modo.val();
+                    $('.rot-solo-tcp').toggle(m !== 'serial');
+                    $('.rot-solo-serie').toggle(m === 'serial');
+                    $('.rot-info').hide();
+                    $('#rot-info-' + m).show();
+
+                    $('#rot-gap-title').text(m === 'tcp'
+                        ? 'Silencio entre tramas (opcional)'
+                        : 'Silencio entre tramas (RS485)');
+                    $('#rot-gap-rtu').toggle(m !== 'tcp');
+                    $('#rot-gap-tcp').toggle(m === 'tcp');
+
+                    if (m === 'serial') {
+                        const t = t35();
+                        $('#rot-t35').text('t3.5 a esta velocidad = ' + t.toFixed(2) +
+                            ' ms. El silencio nunca bajará de ' + Math.ceil(t) + ' ms aunque pongas menos.');
+                    }
+                };
+
+                // Al cambiar de modo, ajustar los gaps SOLO si siguen en el
+                // valor por defecto del modo anterior (si se tocaron, se respetan).
+                $modo.on('change', () => {
+                    const m = $modo.val();
+                    const [g0, e0] = GAPS[modoPrevio] || GAPS.rtu;
+                    const [g1, e1] = GAPS[m] || GAPS.rtu;
+                    if (String($gap.val())    === String(g0)) $gap.val(g1);
+                    if (String($gapErr.val()) === String(e0)) $gapErr.val(e1);
+                    modoPrevio = m;
+                    refrescar();
+                });
+                $('#node-config-input-baudRate').on('input change', refrescar);
+
+                // Checkbox de eco
+                $('#node-config-input-echo').prop('checked', this.echo === true || this.echo === 'true');
+
+                // Buscar puertos serie en el servidor de Node-RED
+                $('#rot-buscar-puertos').on('click', function () {
+                    const $btn = $(this);
+                    const $msg = $('#rot-puertos-msg');
+                    $btn.prop('disabled', true);
+                    $msg.text('buscando…');
+                    $.getJSON('rot-client/puertos')
+                        .done(r => {
+                            const $dl = $('#rot-lista-puertos').empty();
+                            if (!r.disponible) {
+                                $msg.html('<span style="color:#c00">Falta el módulo <code>serialport</code> en el servidor.</span>');
+                                return;
+                            }
+                            (r.puertos || []).forEach(p => $dl.append(
+                                $('<option>').attr('value', p.path).text(p.info || '')));
+                            $msg.text(r.puertos && r.puertos.length
+                                ? r.puertos.length + ' puerto(s) encontrados: despliega el campo para elegir'
+                                : 'No se encontró ninguno. Puedes escribir la ruta a mano.');
+                            $('#node-config-input-serialPort').trigger('focus');
+                        })
+                        .fail(() => $msg.html('<span style="color:#c00">Error consultando el servidor</span>'))
+                        .always(() => $btn.prop('disabled', false));
+                });
+
+                refrescar();
+            },
+
+            oneditsave: function () {
+                this.echo = $('#node-config-input-echo').prop('checked');
+            }
+        });
+    })();
 </script>
 
 <script type="text/html" data-template-name="rot-client">
 
     <div class="form-row">
         <label for="node-config-input-name"><i class="fa fa-tag"></i> Nombre</label>
-        <input type="text" id="node-config-input-name" placeholder="Conversor RS485 / PLC (opcional)">
+        <input type="text" id="node-config-input-name" placeholder="Conversor RS485 / PLC / USB (opcional)">
     </div>
 
     <hr/>
@@ -67,9 +142,10 @@
 
     <div class="form-row">
         <label for="node-config-input-protocol"><i class="fa fa-sitemap"></i> Modo</label>
-        <select id="node-config-input-protocol" style="width:260px">
+        <select id="node-config-input-protocol" style="width:280px">
             <option value="rtu">Modbus RTU over TCP (frame RTU + CRC)</option>
             <option value="tcp">Modbus TCP (cabecera MBAP)</option>
+            <option value="serial">Modbus RTU por puerto serie</option>
         </select>
     </div>
 
@@ -80,25 +156,96 @@
         HF2211…) que reenvían el frame RTU tal cual al bus RS485.<br>
         <b>Modbus TCP</b> — PLCs, analizadores de red, variadores e I/O remotas con puerto
         ethernet propio, y pasarelas que sí traducen a MBAP.<br>
-        Si el equipo responde pero da <b>CRC inválido</b> o <b>cabecera MBAP inválida</b>, casi
-        siempre es que está seleccionado el modo contrario.
+        <b>RTU serie</b> — adaptador USB-RS485, UART de Raspberry Pi / HAT RS485 o puerto COM
+        conectado <b>a la máquina donde corre Node-RED</b>.
     </div>
 
+    <!-- ═══════════════════════ TCP ═══════════════════════ -->
+    <div class="rot-solo-tcp">
+        <hr/>
+        <div class="form-row" style="margin-bottom:6px">
+            <b><i class="fa fa-globe"></i>&nbsp; Conexión TCP</b>
+        </div>
+
+        <div class="form-row">
+            <label for="node-config-input-host"><i class="fa fa-server"></i> IP / Host</label>
+            <input type="text" id="node-config-input-host" placeholder="192.168.1.100" style="width:200px">
+        </div>
+
+        <div class="form-row">
+            <label for="node-config-input-port"><i class="fa fa-plug"></i> Puerto</label>
+            <input type="number" id="node-config-input-port" placeholder="502" style="width:120px">
+        </div>
+    </div>
+
+    <!-- ═══════════════════════ SERIE ═══════════════════════ -->
+    <div class="rot-solo-serie" style="display:none">
+        <hr/>
+        <div class="form-row" style="margin-bottom:6px">
+            <b><i class="fa fa-usb"></i>&nbsp; Puerto serie</b>
+        </div>
+
+        <div class="form-row">
+            <label for="node-config-input-serialPort"><i class="fa fa-random"></i> Puerto</label>
+            <input type="text" id="node-config-input-serialPort" list="rot-lista-puertos"
+                   placeholder="/dev/ttyUSB0 · COM3" style="width:230px">
+            <datalist id="rot-lista-puertos"></datalist>
+            <button type="button" id="rot-buscar-puertos" class="red-ui-button" title="Buscar puertos en el servidor">
+                <i class="fa fa-search"></i>
+            </button>
+        </div>
+        <div class="form-row" style="margin-top:-6px">
+            <label>&nbsp;</label>
+            <span id="rot-puertos-msg" style="color:#999;font-size:12px"></span>
+        </div>
+
+        <div class="form-row">
+            <label for="node-config-input-baudRate"><i class="fa fa-tachometer"></i> Baudios</label>
+            <input type="number" id="node-config-input-baudRate" list="rot-lista-baudios" style="width:110px">
+            <datalist id="rot-lista-baudios">
+                <option value="1200"></option><option value="2400"></option><option value="4800"></option>
+                <option value="9600"></option><option value="19200"></option><option value="38400"></option>
+                <option value="57600"></option><option value="115200"></option>
+            </datalist>
+        </div>
+
+        <div class="form-row">
+            <label for="node-config-input-dataBits"><i class="fa fa-th"></i> Formato</label>
+            <select id="node-config-input-dataBits" style="width:70px" title="Bits de datos">
+                <option value="8">8</option>
+                <option value="7">7</option>
+            </select>
+            <select id="node-config-input-parity" style="width:100px" title="Paridad">
+                <option value="none">Sin paridad</option>
+                <option value="even">Par (E)</option>
+                <option value="odd">Impar (O)</option>
+                <option value="mark">Mark</option>
+                <option value="space">Space</option>
+            </select>
+            <select id="node-config-input-stopBits" style="width:90px" title="Bits de parada">
+                <option value="1">1 stop</option>
+                <option value="2">2 stop</option>
+            </select>
+        </div>
+        <div class="form-row" style="margin-top:-6px">
+            <label>&nbsp;</label>
+            <span style="color:#999;font-size:12px">Lo más habitual: 8N1. El estándar Modbus pide 8E1 (o 8N2 sin paridad).</span>
+        </div>
+
+        <div class="form-row">
+            <label for="node-config-input-echo" style="width:auto">
+                <input type="checkbox" id="node-config-input-echo" style="width:auto;margin:0 6px 0 0;vertical-align:baseline">
+                El adaptador devuelve eco de lo que transmite
+            </label>
+        </div>
+        <div class="form-row" style="margin-top:-6px">
+            <span style="color:#999;font-size:12px">Actívalo solo si todas las lecturas dan <b>CRC inválido</b>
+            aunque el cableado y el formato estén bien: pasa con algunos adaptadores USB-RS485 baratos y HATs.</span>
+        </div>
+    </div>
+
+    <!-- ═══════════════════════ COMÚN ═══════════════════════ -->
     <hr/>
-    <div class="form-row" style="margin-bottom:6px">
-        <b><i class="fa fa-globe"></i>&nbsp; Conexión TCP</b>
-    </div>
-
-    <div class="form-row">
-        <label for="node-config-input-host"><i class="fa fa-server"></i> IP / Host</label>
-        <input type="text" id="node-config-input-host" placeholder="192.168.1.100" style="width:200px">
-    </div>
-
-    <div class="form-row">
-        <label for="node-config-input-port"><i class="fa fa-plug"></i> Puerto</label>
-        <input type="number" id="node-config-input-port" placeholder="502" style="width:120px">
-    </div>
-
     <div class="form-row">
         <label for="node-config-input-timeout"><i class="fa fa-hourglass-half"></i> Timeout</label>
         <input type="number" id="node-config-input-timeout" placeholder="5" step="0.5" min="0.5" style="width:100px">
@@ -122,6 +269,11 @@
         <span style="margin-left:4px;color:#999;font-size:12px">ms tras error o timeout</span>
     </div>
 
+    <div class="form-row rot-solo-serie" style="display:none;margin-top:-6px">
+        <label>&nbsp;</label>
+        <span id="rot-t35" style="color:#999;font-size:12px"></span>
+    </div>
+
     <div id="rot-gap-rtu" class="form-row" style="background:#FFF8E1;border-left:3px solid #FFA000;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.7">
         <i class="fa fa-lightbulb-o" style="color:#FFA000"></i>&nbsp;
         El esclavo necesita soltar la línea antes de recibir la siguiente petición.
@@ -137,7 +289,7 @@
     </div>
 
     <hr/>
-    <div id="rot-info-rtu" class="form-row" style="background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
+    <div id="rot-info-rtu" class="form-row rot-info" style="background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
         <i class="fa fa-info-circle" style="color:#7B5EA8"></i>&nbsp;
         Este cliente es <b>compartido</b> entre todos los nodos ROT Read y ROT Write
         que apunten al mismo conversor.<br>
@@ -145,59 +297,71 @@
         las peticiones y evitar colisiones en el bus RS485.
     </div>
 
-    <div id="rot-info-tcp" class="form-row" style="display:none;background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
+    <div id="rot-info-tcp" class="form-row rot-info" style="display:none;background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
         <i class="fa fa-info-circle" style="color:#7B5EA8"></i>&nbsp;
         Este cliente es <b>compartido</b> entre todos los nodos ROT Read y ROT Write
         que apunten al mismo equipo.<br>
-        Usa <b>una sola conexión TCP persistente</b> y serializa las peticiones: se envía una
-        transacción y se espera su respuesta antes de mandar la siguiente. El
+        Usa <b>una sola conexión TCP persistente</b> y serializa las peticiones. El
         <b>Transaction ID</b> del MBAP descarta automáticamente las respuestas rezagadas.<br>
         El <b>Slave/Unit ID</b> se configura en cada nodo Read/Write; en equipos TCP nativos
         suele valer 1 (o 255) y en pasarelas es el ID real del esclavo serie.
     </div>
 
+    <div id="rot-info-serial" class="form-row rot-info" style="display:none;background:#F3EFF9;border-left:3px solid #7B5EA8;padding:10px 14px;border-radius:4px;font-size:12px;color:#333;line-height:1.8">
+        <i class="fa fa-info-circle" style="color:#7B5EA8"></i>&nbsp;
+        <b>Un puerto serie solo puede abrirlo un proceso a la vez.</b> Crea <b>un único
+        cliente por puerto</b> y apunta a él todos los nodos Read/Write de ese bus.<br>
+        En Linux usa preferentemente las rutas <code>/dev/serial/by-id/…</code>: no cambian
+        al reiniciar ni al enchufar otro adaptador, a diferencia de <code>/dev/ttyUSB0</code>.<br>
+        Si da <b>sin permiso</b>, añade el usuario de Node-RED al grupo <code>dialout</code>.
+    </div>
+
 </script>
 
 <script type="text/html" data-help-name="rot-client">
-    <p>Nodo de configuración compartido para comunicaciones <b>Modbus RTU over TCP</b>
-    y <b>Modbus TCP</b>.</p>
-    <p>Gestiona una única conexión TCP persistente con cola interna de peticiones.
-    Todos los nodos <b>ROT Read</b> y <b>ROT Write</b> que apunten al mismo equipo
+    <p>Nodo de configuración compartido para comunicaciones <b>Modbus RTU over TCP</b>,
+    <b>Modbus TCP</b> y <b>Modbus RTU por puerto serie</b>.</p>
+    <p>Gestiona un único enlace persistente con cola interna de peticiones.
+    Todos los nodos <b>ROT Read</b> y <b>ROT Write</b> que apunten al mismo equipo o bus
     deben usar el mismo cliente.</p>
 
-    <h3>Protocolos</h3>
+    <h3>Modos</h3>
     <dl class="message-properties">
         <dt>Modbus RTU over TCP</dt>
         <dd>El frame serie completo (<code>[slave][FC][datos][CRC16]</code>) viaja tal cual
-        por el socket. Es lo que hacen los conversores RS485↔Ethernet transparentes.</dd>
+        por un socket TCP. Es lo que hacen los conversores RS485↔Ethernet transparentes.</dd>
         <dt>Modbus TCP</dt>
         <dd>Cabecera MBAP de 7 bytes (<code>[TID][Protocol=0][Length][UnitID]</code>) seguida
-        de la PDU, sin CRC. Es el estándar de PLCs y equipos con ethernet nativo.</dd>
+        de la PDU, sin CRC. Estándar de PLCs y equipos con ethernet nativo.</dd>
+        <dt>Modbus RTU por puerto serie</dt>
+        <dd>La misma trama que RTU over TCP, pero por un puerto serie local (USB-RS485,
+        UART, COM). Requiere el módulo <code>serialport</code>, que se instala con el paquete.</dd>
     </dl>
-    <p>El resto de la configuración y el comportamiento de los nodos Read/Write es idéntico
-    en ambos modos: mismos códigos de función, mismos registros, mismas salidas.</p>
-
-    <h3>Ventajas</h3>
-    <ul>
-        <li>Una sola conexión TCP para todos los nodos — sin conflictos ni errores EACCES.</li>
-        <li>Cola serializada — las peticiones de lectura y escritura nunca se solapan.</li>
-        <li>Reconexión automática si el equipo se desconecta.</li>
-        <li>Descarte de respuestas rezagadas: por Transaction ID en TCP, por resincronización
-        de cabecera en RTU.</li>
-    </ul>
+    <p>Los nodos Read/Write funcionan igual en los tres modos: mismos códigos de función,
+    mismos registros, mismas salidas.</p>
 
     <h3>Configuración</h3>
     <dl class="message-properties">
         <dt>Modo <span class="property-type">string</span></dt>
-        <dd><code>rtu</code> (RTU over TCP) o <code>tcp</code> (Modbus TCP).</dd>
-        <dt>IP / Host <span class="property-type">string</span></dt>
-        <dd>Dirección IP o hostname del conversor o del equipo Modbus.</dd>
-        <dt>Puerto <span class="property-type">number</span></dt>
-        <dd>Puerto TCP. Por defecto 502.</dd>
+        <dd><code>rtu</code>, <code>tcp</code> o <code>serial</code>.</dd>
+        <dt>IP / Host, Puerto <span class="property-type">string / number</span></dt>
+        <dd>Solo modos TCP. Destino de la conexión; puerto 502 por defecto.</dd>
+        <dt>Puerto serie <span class="property-type">string</span></dt>
+        <dd>Solo modo serie. <code>/dev/ttyUSB0</code>, <code>/dev/serial/by-id/…</code>,
+        <code>/dev/serial0</code> (Raspberry Pi) o <code>COM3</code> (Windows).
+        El botón de lupa lista los puertos del servidor.</dd>
+        <dt>Baudios, formato <span class="property-type">number</span></dt>
+        <dd>Deben coincidir con los de todos los esclavos del bus. Lo habitual: 9600 8N1.</dd>
+        <dt>Eco local <span class="property-type">boolean</span></dt>
+        <dd>Descarta los bytes que algunos adaptadores devuelven al transmitir.</dd>
         <dt>Timeout <span class="property-type">number</span></dt>
         <dd>Tiempo máximo de espera por operación, en segundos.</dd>
         <dt>Silencio entre tramas <span class="property-type">number</span></dt>
-        <dd>Pausa obligatoria entre transacciones, en ms. Imprescindible en RS485
-        (50 ms típico); normalmente 0 en Modbus TCP nativo.</dd>
+        <dd>Pausa entre transacciones, en ms. Imprescindible en RS485 (50 ms típico; en modo
+        serie nunca baja del t3.5 del bus); normalmente 0 en Modbus TCP nativo.</dd>
     </dl>
+
+    <h3>Sin conexión</h3>
+    <p>Si el enlace está caído, cada lectura o escritura falla al momento por la salida de
+    error en lugar de quedarse en cola, y el cliente reintenta conectar cada 2 s.</p>
 </script>
